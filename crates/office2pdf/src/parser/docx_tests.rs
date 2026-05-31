@@ -505,6 +505,92 @@ fn test_parse_mixed_list_and_paragraphs() {
     assert!(para_count >= 1, "Expected at least 1 paragraph block");
 }
 
+#[test]
+fn test_merges_adjacent_lists_with_different_num_ids() {
+    // pandoc/LibreOffice fragment a single logical list across several numIds
+    // (issue #176). Adjacent list paragraphs must merge into one list so ordered
+    // numbering continues (1., 2.) instead of restarting, and `ilvl` nesting is
+    // preserved instead of flattening into a separate bullet list.
+    // One abstract: ordered level 0, bulleted level 1 — the same shape the
+    // passing `test_parse_mixed_ordered_and_bulleted_levels` relies on, so its
+    // resolution is trusted. Two distinct numIds both reference it, mirroring
+    // the issue's document where consecutive items carry different numId values.
+    let abstract_num = docx_rs::AbstractNumbering::new(0)
+        .add_level(docx_rs::Level::new(
+            0,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("decimal"),
+            docx_rs::LevelText::new("%1."),
+            docx_rs::LevelJc::new("left"),
+        ))
+        .add_level(docx_rs::Level::new(
+            1,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("bullet"),
+            docx_rs::LevelText::new("\u{2022}"),
+            docx_rs::LevelJc::new("left"),
+        ));
+
+    let data = build_docx_with_numbering(
+        vec![abstract_num],
+        vec![docx_rs::Numbering::new(1, 0), docx_rs::Numbering::new(2, 0)],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("First"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Second"))
+                .numbering(docx_rs::NumberingId::new(2), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Sub"))
+                .numbering(docx_rs::NumberingId::new(2), docx_rs::IndentLevel::new(1)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lists.len(),
+        1,
+        "adjacent list paragraphs must merge into a single list"
+    );
+    let list = lists[0];
+    assert_eq!(list.kind, ListKind::Ordered);
+    assert_eq!(list.items.len(), 3);
+    assert_eq!(list.items[0].level, 0);
+    assert_eq!(list.items[0].start_at, Some(1));
+    assert_eq!(list.items[1].level, 0);
+    assert_eq!(
+        list.items[1].start_at, None,
+        "the second ordered item continues counting (-> 2.), it must not restart"
+    );
+    assert_eq!(
+        list.items[2].level, 1,
+        "the sub-item stays nested at level 1"
+    );
+    assert_eq!(
+        list.level_styles.get(&0).map(|style| style.kind),
+        Some(ListKind::Ordered)
+    );
+    assert_eq!(
+        list.level_styles.get(&1).map(|style| style.kind),
+        Some(ListKind::Unordered)
+    );
+}
+
 #[path = "docx_page_feature_tests.rs"]
 mod page_feature_tests;
 

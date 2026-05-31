@@ -17,10 +17,10 @@ use crate::parser::Parser;
 #[cfg(test)]
 use self::contexts::scan_table_headers;
 use self::contexts::{
-    BidiContext, ChartContext, DocxConversionContext, DrawingTextBoxContext, DrawingTextBoxInfo,
-    MathContext, NoteContext, SmallCapsContext, TableHeaderContext, VmlTextBoxContext,
-    VmlTextBoxInfo, WrapContext, build_chart_context_from_xml, build_math_context_from_xml,
-    build_note_context_from_xml, build_wrap_context_from_xml,
+    BidiContext, ChartContext, DocxConversionContext, DrawingShapeContext, DrawingTextBoxContext,
+    DrawingTextBoxInfo, MathContext, NoteContext, SmallCapsContext, TableHeaderContext,
+    VmlTextBoxContext, VmlTextBoxInfo, WrapContext, build_chart_context_from_xml,
+    build_math_context_from_xml, build_note_context_from_xml, build_wrap_context_from_xml,
     extract_column_layout_from_section_property, is_note_reference_run, read_zip_text,
     scan_column_layouts,
 };
@@ -42,9 +42,9 @@ use self::styles::{
 };
 use self::tables::convert_table;
 use self::text::{
-    extract_doc_default_text_style, extract_paragraph_style, extract_run_style, extract_run_text,
-    extract_run_text_skip_column_breaks, extract_tab_stop_overrides, is_column_break,
-    parse_hex_color, resolve_hyperlink_url,
+    extract_doc_default_text_style, extract_paragraph_style, extract_run_style,
+    extract_run_style_id, extract_run_text, extract_run_text_skip_column_breaks,
+    extract_tab_stop_overrides, is_column_break, parse_hex_color, resolve_hyperlink_url,
 };
 #[cfg(test)]
 use self::text::{extract_tab_stops, resolve_highlight_color};
@@ -112,6 +112,7 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
             let notes = build_note_context_from_xml(doc_xml.as_deref(), &mut archive);
             let wraps = build_wrap_context_from_xml(doc_xml.as_deref());
             let drawing_text_boxes = DrawingTextBoxContext::from_xml(doc_xml.as_deref());
+            let drawing_shapes = DrawingShapeContext::from_xml(doc_xml.as_deref());
             let table_headers = TableHeaderContext::from_xml(doc_xml.as_deref());
             let vml_text_boxes = VmlTextBoxContext::from_xml(doc_xml.as_deref());
             let math = build_math_context_from_xml(doc_xml.as_deref());
@@ -127,6 +128,7 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
                 notes,
                 wraps,
                 drawing_text_boxes,
+                drawing_shapes,
                 table_headers,
                 vml_text_boxes,
                 bidi,
@@ -147,6 +149,7 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
                 notes: NoteContext::empty(),
                 wraps: WrapContext::empty(),
                 drawing_text_boxes: DrawingTextBoxContext::from_xml(None),
+                drawing_shapes: DrawingShapeContext::from_xml(None),
                 table_headers: TableHeaderContext::from_xml(None),
                 vml_text_boxes: VmlTextBoxContext::from_xml(None),
                 bidi: BidiContext::from_xml(None),
@@ -386,6 +389,7 @@ fn build_text_run(
     run_property: &docx_rs::RunProperty,
     is_small_caps: bool,
     resolved_style: Option<&ResolvedStyle>,
+    style_map: &StyleMap,
     href: Option<String>,
 ) -> Option<Run> {
     if text.is_empty() {
@@ -394,6 +398,14 @@ fn build_text_run(
     let mut explicit_style: TextStyle = extract_run_style(run_property);
     if is_small_caps {
         explicit_style.small_caps = Some(true);
+    }
+    // Layer the referenced character style (`<w:rStyle>`, e.g. a syntax
+    // highlighting token) beneath the run's explicit properties so its color
+    // and weight apply while explicit run formatting still wins (issue #176).
+    if let Some(char_style) = extract_run_style_id(run_property).and_then(|id| style_map.get(&id)) {
+        let mut combined: TextStyle = char_style.text.clone();
+        combined.merge_from(&explicit_style);
+        explicit_style = combined;
     }
     Some(Run {
         text,
@@ -435,6 +447,16 @@ fn extract_run_children_media(
                 drawing, images, hyperlinks, style_map, ctx,
             ));
         }
+        // A `<w:drawing>` that docx-rs cannot classify as a picture or a text box
+        // (geometry-only `wps:wsp` shapes) leaves `data == None`. Pair each such
+        // drawing, in document order, with the geometry scanned from the raw XML
+        // so rectangles, lines and arrows are not dropped (issue #176).
+        if let docx_rs::RunChild::Drawing(drawing) = run_child
+            && drawing.data.is_none()
+            && let Some(shape) = ctx.drawing_shapes.consume_next()
+        {
+            text_box_blocks.push(Block::FloatingShape(shape));
+        }
         if let docx_rs::RunChild::Shape(shape) = run_child {
             let vml_text_box: VmlTextBoxInfo = ctx.vml_text_boxes.consume_next();
             if let Some(floating_text_box) = extract_vml_shape_text_box(shape, &vml_text_box) {
@@ -465,6 +487,7 @@ fn process_hyperlink_runs(
     hyperlink: &docx_rs::Hyperlink,
     hyperlinks: &HyperlinkMap,
     resolved_style: Option<&ResolvedStyle>,
+    style_map: &StyleMap,
     ctx: &DocxConversionContext,
     runs: &mut Vec<Run>,
 ) {
@@ -478,6 +501,7 @@ fn process_hyperlink_runs(
                 &run.run_property,
                 hl_small_caps,
                 resolved_style,
+                style_map,
                 href.clone(),
             ) {
                 runs.push(ir_run);
@@ -565,22 +589,39 @@ fn convert_paragraph_blocks(
 
                     // Still extract any text from this run (after the break)
                     let text: String = extract_run_text_skip_column_breaks(run);
-                    if let Some(ir_run) =
-                        build_text_run(text, &run.run_property, is_small_caps, resolved_style, None)
-                    {
+                    if let Some(ir_run) = build_text_run(
+                        text,
+                        &run.run_property,
+                        is_small_caps,
+                        resolved_style,
+                        style_map,
+                        None,
+                    ) {
                         runs.push(ir_run);
                     }
                 } else {
                     let text: String = extract_run_text(run);
-                    if let Some(ir_run) =
-                        build_text_run(text, &run.run_property, is_small_caps, resolved_style, None)
-                    {
+                    if let Some(ir_run) = build_text_run(
+                        text,
+                        &run.run_property,
+                        is_small_caps,
+                        resolved_style,
+                        style_map,
+                        None,
+                    ) {
                         runs.push(ir_run);
                     }
                 }
             }
             docx_rs::ParagraphChild::Hyperlink(hyperlink) => {
-                process_hyperlink_runs(hyperlink, hyperlinks, resolved_style, ctx, &mut runs);
+                process_hyperlink_runs(
+                    hyperlink,
+                    hyperlinks,
+                    resolved_style,
+                    style_map,
+                    ctx,
+                    &mut runs,
+                );
             }
             _ => {}
         }

@@ -8,10 +8,10 @@ use crate::error::ConvertError;
 use crate::ir::{
     Alignment, ArrowHead, Block, BorderLineStyle, BorderSide, CellBorder, CellVerticalAlign, Chart,
     ChartType, Color, ColumnLayout, Document, FixedElement, FixedElementKind, FixedPage,
-    FloatingImage, FloatingTextBox, FlowPage, GradientFill, HFInline, HeaderFooter, ImageCrop,
-    ImageData, ImageFormat, Insets, LineSpacing, List, ListKind, Margins, MathEquation, Metadata,
-    Page, PageSize, Paragraph, ParagraphStyle, Run, Shadow, Shape, ShapeKind, SheetPage, SmartArt,
-    TabAlignment, TabLeader, TabStop, Table, TableCell, TableRow, TextBoxData,
+    FloatingImage, FloatingShape, FloatingTextBox, FlowPage, GradientFill, HFInline, HeaderFooter,
+    ImageCrop, ImageData, ImageFormat, Insets, LineSpacing, List, ListKind, Margins, MathEquation,
+    Metadata, Page, PageSize, Paragraph, ParagraphStyle, Run, Shadow, Shape, ShapeKind, SheetPage,
+    SmartArt, TabAlignment, TabLeader, TabStop, Table, TableCell, TableRow, TextBoxData,
     TextBoxVerticalAlign, TextDirection, TextStyle, VerticalTextAlign, WrapMode,
 };
 
@@ -907,6 +907,10 @@ fn generate_block(out: &mut String, block: &Block, ctx: &mut GenCtx) -> Result<(
             Ok(())
         }
         Block::FloatingTextBox(ftb) => generate_floating_text_box(out, ftb, ctx),
+        Block::FloatingShape(fs) => {
+            generate_floating_shape(out, fs);
+            Ok(())
+        }
         Block::List(list) => generate_list(out, list),
         Block::MathEquation(math) => {
             generate_math_equation(out, math);
@@ -1101,6 +1105,22 @@ fn generate_floating_text_box(
     }
 
     Ok(())
+}
+
+/// Generate Typst markup for a floating geometric shape (issue #176).
+///
+/// Mirrors `generate_floating_image`: the shape is placed at its anchor offset
+/// via `#place(top + left, …)`. Word-processing shapes use `wrapNone`, so no
+/// float is needed.
+fn generate_floating_shape(out: &mut String, fs: &FloatingShape) {
+    let _ = write!(
+        out,
+        "#place(top + left, dx: {}pt, dy: {}pt)[",
+        format_f64(fs.offset_x),
+        format_f64(fs.offset_y)
+    );
+    shapes::generate_shape(out, &fs.shape, fs.width, fs.height);
+    out.push_str("]\n");
 }
 
 fn generate_floating_text_box_content(

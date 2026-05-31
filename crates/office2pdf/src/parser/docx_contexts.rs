@@ -4,6 +4,8 @@ mod bidi;
 mod chart;
 #[path = "docx_context_columns.rs"]
 mod columns;
+#[path = "docx_context_shape.rs"]
+mod docx_context_shape;
 #[path = "docx_context_drawing.rs"]
 mod drawing;
 #[path = "docx_context_math.rs"]
@@ -22,6 +24,7 @@ mod wrap;
 pub(super) use bidi::BidiContext;
 pub(super) use chart::{ChartContext, build_chart_context_from_xml};
 pub(super) use columns::{extract_column_layout_from_section_property, scan_column_layouts};
+pub(super) use docx_context_shape::DrawingShapeContext;
 pub(super) use drawing::{DrawingTextBoxContext, DrawingTextBoxInfo};
 pub(super) use math::{MathContext, build_math_context_from_xml};
 pub(super) use notes::{
@@ -42,6 +45,7 @@ pub(super) struct DocxConversionContext {
     pub(super) notes: NoteContext,
     pub(super) wraps: WrapContext,
     pub(super) drawing_text_boxes: DrawingTextBoxContext,
+    pub(super) drawing_shapes: DrawingShapeContext,
     pub(super) table_headers: TableHeaderContext,
     pub(super) vml_text_boxes: VmlTextBoxContext,
     pub(super) bidi: BidiContext,

@@ -276,3 +276,14 @@ pub(super) fn extract_run_text(run: &docx_rs::Run) -> String {
     }
     text
 }
+
+/// Extract the referenced character style id (`<w:rStyle>`) from a run's
+/// properties, if present. docx-rs serialises the reference under the `style`
+/// key. Used to resolve syntax-highlighting token styles (issue #176).
+pub(super) fn extract_run_style_id(run_property: &docx_rs::RunProperty) -> Option<String> {
+    serde_json::to_value(run_property)
+        .ok()?
+        .get("style")?
+        .as_str()
+        .map(String::from)
+}
