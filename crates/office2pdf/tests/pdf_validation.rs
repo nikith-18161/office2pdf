@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! PDF validation tests using qpdf.
 //!
 //! These tests convert real fixture files to PDF and validate the output

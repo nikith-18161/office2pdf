@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Integration tests for PPTX fixtures.
 //!
 //! Each real-world `.pptx` file in `tests/fixtures/pptx/` gets two tests:

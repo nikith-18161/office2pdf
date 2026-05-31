@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Integration tests for XLSX fixtures.
 //!
 //! Each real-world `.xlsx` file in `tests/fixtures/xlsx/` gets two tests:

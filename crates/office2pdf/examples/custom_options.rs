@@ -3,13 +3,19 @@
 //! Usage:
 //!   cargo run --example custom_options -- input.pptx output.pdf
 
-use std::env;
-use std::fs;
-use std::process;
+// `office2pdf::convert_with_options` reads from the filesystem and is not
+// available on wasm32. Keep a stub so the example still compiles for that target.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
 
-use office2pdf::config::{ConvertOptions, PaperSize, SlideRange};
-
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
+    use std::env;
+    use std::fs;
+    use std::process;
+
+    use office2pdf::config::{ConvertOptions, PaperSize, SlideRange};
+
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
         eprintln!("Usage: {} <input> <output.pdf>", args[0]);

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Performance validation tests with tiered targets.
 //!
 //! Three tiers based on document complexity:

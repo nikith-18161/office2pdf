@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Bulk conversion smoke tests for all fixture files.
 //!
 //! These tests iterate over ALL fixture files in `tests/fixtures/` and attempt

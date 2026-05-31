@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Artifact generator for visual comparison of classified fixtures.
 //!
 //! Converts each input file, renders both output and ground truth PDFs to PNGs,

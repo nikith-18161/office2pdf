@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only unit tests (filesystem, system fonts)
 use super::test_support::{
     build_docx_with_title, build_test_docx, make_simple_document, make_test_docx_bytes,
 };

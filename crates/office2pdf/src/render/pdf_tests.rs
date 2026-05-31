@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only unit tests (filesystem, system fonts)
 use super::*;
 
 #[test]

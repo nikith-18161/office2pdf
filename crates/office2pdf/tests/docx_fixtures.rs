@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))] // native-only integration tests (fs, qpdf, criterion)
 //! Integration tests for DOCX fixtures.
 //!
 //! Each real-world `.docx` file in `tests/fixtures/docx/` gets two tests:
