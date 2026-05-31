@@ -1083,14 +1083,18 @@ fn generate_floating_text_box(
             out.push_str("]\n");
         }
         WrapMode::Behind | WrapMode::InFront | WrapMode::None => {
+            // Anchor to the current flow position (the box's paragraph), not the
+            // page, by wrapping `#place` in a zero-size box. Without this the
+            // box piles at the page top, away from the shapes it belongs with
+            // (issue #176).
             let _ = writeln!(
                 out,
-                "#place(top + left, dx: {}pt, dy: {}pt)[",
+                "#box(width: 0pt, height: 0pt)[#place(top + left, dx: {}pt, dy: {}pt)[",
                 format_f64(ftb.offset_x),
                 format_f64(ftb.offset_y)
             );
             generate_floating_text_box_content(out, ftb, ctx)?;
-            out.push_str("]\n");
+            out.push_str("]]\n");
         }
         WrapMode::Square | WrapMode::Tight => {
             let _ = writeln!(
@@ -1109,18 +1113,22 @@ fn generate_floating_text_box(
 
 /// Generate Typst markup for a floating geometric shape (issue #176).
 ///
-/// Mirrors `generate_floating_image`: the shape is placed at its anchor offset
-/// via `#place(top + left, …)`. Word-processing shapes use `wrapNone`, so no
-/// float is needed.
+/// The DOCX anchor positions the shape relative to its paragraph (`positionV
+/// relativeFrom="paragraph"`) and the text column (`positionH
+/// relativeFrom="column"`), not the page. A bare `#place(top + left, …)` at the
+/// document top level anchors to the page, piling every shape at the top. To
+/// anchor to the current flow position instead, the `#place` is wrapped in a
+/// zero-size `#box`, whose top-left sits exactly where the anchoring paragraph
+/// is laid out. Word-processing shapes use `wrapNone`, so no float is needed.
 fn generate_floating_shape(out: &mut String, fs: &FloatingShape) {
     let _ = write!(
         out,
-        "#place(top + left, dx: {}pt, dy: {}pt)[",
+        "#box(width: 0pt, height: 0pt)[#place(top + left, dx: {}pt, dy: {}pt)[",
         format_f64(fs.offset_x),
         format_f64(fs.offset_y)
     );
     shapes::generate_shape(out, &fs.shape, fs.width, fs.height);
-    out.push_str("]\n");
+    out.push_str("]]\n");
 }
 
 fn generate_floating_text_box_content(
