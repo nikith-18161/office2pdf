@@ -128,7 +128,7 @@ When asked to "release", always perform **both** GitHub Release and crates.io pu
 1. **Version bump** — Create a PR (`chore/publish-<version>`) that bumps `version` in both `crates/office2pdf/Cargo.toml` and `crates/office2pdf-cli/Cargo.toml`, and updates the CLI's `office2pdf` dependency version. Merge via standard PR workflow.
 2. **GitHub Release** — `gh release create v<version>` with changelog and contributors section.
    - Use `git log <prev-tag>..HEAD --format='%an' | sort -u` to find contributors. List each with their GitHub profile link.
-3. **crates.io publish** — Publish lib first, then CLI:
-   - `cargo publish -p office2pdf`
-   - `cargo publish -p office2pdf-cli`
+3. **crates.io publish** — `.github/workflows/release.yml` publishes lib first, then CLI. It requires the `CARGO_REGISTRY_TOKEN` repo secret.
+   - New releases publish automatically on `release.published`.
+   - Existing releases can be published with `gh workflow run release.yml -f tag=v<version>`.
 4. **Tag alignment** — Ensure the GitHub release tag (`v<version>`) and Cargo.toml versions match.
