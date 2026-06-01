@@ -10,7 +10,7 @@ mod common;
 use std::path::PathBuf;
 
 use office2pdf::config::ConvertOptions;
-use office2pdf::ir::{Block, FlowPage, Page, Run};
+use office2pdf::ir::{ArrowHead, Block, FlowPage, ListKind, Page, Paragraph, Run, ShapeKind};
 use office2pdf::parser::Parser;
 use office2pdf::parser::docx::DocxParser;
 
@@ -107,6 +107,44 @@ fn collect_runs_from_block<'a>(block: &'a Block, out: &mut Vec<&'a Run>) {
         | Block::Chart(_)
         | Block::PageBreak
         | Block::ColumnBreak => {}
+    }
+}
+
+fn paragraph_text(paragraph: &Paragraph) -> String {
+    paragraph.runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+fn block_text(block: &Block) -> String {
+    match block {
+        Block::Paragraph(paragraph) => paragraph_text(paragraph),
+        Block::List(list) => list
+            .items
+            .iter()
+            .flat_map(|item| item.content.iter())
+            .map(paragraph_text)
+            .collect::<Vec<String>>()
+            .join("\n"),
+        Block::Table(table) => table
+            .rows
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .flat_map(|cell| cell.content.iter())
+            .map(block_text)
+            .collect::<Vec<String>>()
+            .join("\n"),
+        Block::FloatingTextBox(text_box) => text_box
+            .content
+            .iter()
+            .map(block_text)
+            .collect::<Vec<String>>()
+            .join("\n"),
+        Block::Image(_)
+        | Block::FloatingImage(_)
+        | Block::FloatingShape(_)
+        | Block::MathEquation(_)
+        | Block::Chart(_)
+        | Block::PageBreak
+        | Block::ColumnBreak => String::new(),
     }
 }
 
@@ -406,6 +444,145 @@ fn structure_word_tables() {
     let pages = flow_pages("word_tables.docx");
     let blocks = all_blocks(&pages);
     assert!(has_table_block(&blocks), "should have Block::Table");
+}
+
+// ---------------------------------------------------------------------------
+// issue_176_office2pdf_test.docx
+// ---------------------------------------------------------------------------
+
+const ISSUE_176_FIXTURE: &str = "issue_176_office2pdf_test.docx";
+
+#[test]
+fn smoke_issue_176_office2pdf_test() {
+    assert_produces_valid_pdf(ISSUE_176_FIXTURE);
+}
+
+#[test]
+fn structure_issue_176_office2pdf_test() {
+    let pages = flow_pages(ISSUE_176_FIXTURE);
+    let blocks = all_blocks(&pages);
+    let runs = all_runs(&blocks);
+
+    let floating_shape_count = blocks
+        .iter()
+        .filter(|block| matches!(block, Block::FloatingShape(_)))
+        .count();
+    assert_eq!(
+        floating_shape_count, 3,
+        "issue #176 should preserve two rectangles and one arrow shape"
+    );
+
+    let rectangle_count = blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block,
+                Block::FloatingShape(shape)
+                    if matches!(shape.shape.kind, ShapeKind::Rectangle)
+                        && shape.shape.fill.is_some()
+                        && shape.shape.stroke.is_some()
+            )
+        })
+        .count();
+    assert_eq!(
+        rectangle_count, 2,
+        "blue filled rectangle shapes should survive parsing"
+    );
+
+    assert!(
+        blocks.iter().any(|block| {
+            matches!(
+                block,
+                Block::FloatingShape(shape)
+                    if matches!(
+                        shape.shape.kind,
+                        ShapeKind::Line {
+                            tail_end: ArrowHead::Triangle,
+                            ..
+                        }
+                    )
+            )
+        }),
+        "the connector arrow should survive parsing with its arrowhead"
+    );
+
+    let floating_text_box_texts: Vec<String> = blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::FloatingTextBox(text_box) => Some(
+                text_box
+                    .content
+                    .iter()
+                    .map(block_text)
+                    .collect::<Vec<String>>()
+                    .join("\n"),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        floating_text_box_texts.len(),
+        2,
+        "issue #176 should preserve both floating text boxes"
+    );
+    assert!(
+        floating_text_box_texts
+            .iter()
+            .any(|text| text.contains("Very important drawing")),
+        "left text box content should be preserved"
+    );
+    assert!(
+        floating_text_box_texts
+            .iter()
+            .any(|text| text.contains("Very important text inside a box")),
+        "right text box content should be preserved"
+    );
+
+    let list = blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .expect("issue #176 should contain one logical list");
+    assert_eq!(list.kind, ListKind::Ordered);
+    assert_eq!(
+        list.items
+            .iter()
+            .map(|item| item.level)
+            .collect::<Vec<u32>>(),
+        vec![0, 0, 1, 1],
+        "ordered items should continue while sub-items stay nested"
+    );
+    assert_eq!(
+        list.items[1].start_at, None,
+        "the second ordered item should continue numbering instead of restarting"
+    );
+
+    let table = blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::Table(table) => Some(table),
+            _ => None,
+        })
+        .expect("issue #176 should contain the final data table");
+    assert_eq!(table.rows.len(), 4);
+    assert!(
+        table.rows.iter().all(|row| row.cells.len() == 2),
+        "the data table should remain two columns wide"
+    );
+    assert_eq!(table.header_row_count, 1);
+
+    let document_text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    assert!(
+        document_text.contains("$TERM\nprintf"),
+        "hard line breaks in the code block should be preserved"
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.text == "echo" && run.style.color.is_some()),
+        "syntax-highlight character styles should apply to code tokens"
+    );
 }
 
 // ===========================================================================

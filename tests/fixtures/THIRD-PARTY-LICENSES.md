@@ -230,6 +230,17 @@ SOFTWARE.
 
 ---
 
+## Public GitHub Issue Reproduction Fixtures
+
+The following files were provided publicly in GitHub issues for reproduction and
+are retained only as regression fixtures.
+
+- **Source:** <https://github.com/developer0hye/office2pdf/issues/176>
+- **File:**
+  - `docx/issue_176_office2pdf_test.docx`
+
+---
+
 ## Original Files (No Third-Party License)
 
 The following files were created by this project's contributors and are covered
