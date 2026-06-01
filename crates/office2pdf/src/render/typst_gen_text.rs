@@ -29,6 +29,15 @@ pub(super) fn generate_paragraph(out: &mut String, para: &Paragraph) -> Result<(
         write_par_settings(out, style);
     }
 
+    if para.runs.is_empty() {
+        out.push_str("#v(12pt)");
+        if has_para_style {
+            out.push_str("\n]");
+        }
+        out.push('\n');
+        return Ok(());
+    }
+
     let alignment = style.alignment;
     let use_align = matches!(
         alignment,
@@ -757,6 +766,12 @@ pub(super) fn escape_typst(text: &str) -> String {
             && chars.peek().is_some_and(|next| next.is_whitespace());
 
         match ch {
+            // A hard line break (`<w:br/>`, carried through the IR as '\n') must
+            // force a new line. A bare newline in Typst markup collapses to a
+            // space, which silently merged code lines like `echo` / `printf`
+            // (issue #176).
+            '\n' => result.push_str("#linebreak()"),
+            '\r' => {}
             '#' | '*' | '_' | '`' | '<' | '>' | '@' | '\\' | '~' | '/' | '$' | '[' | ']' | '{'
             | '}'
                 if !should_escape_list_prefix =>

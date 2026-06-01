@@ -207,6 +207,86 @@ fn test_floating_text_box_top_and_bottom_codegen() {
 // ── Math equation codegen tests ──
 
 #[test]
+fn test_floating_text_box_content_is_top_left_aligned_inside_bounds() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::FloatingTextBox(
+        FloatingTextBox {
+            content: vec![make_paragraph("Top aligned")],
+            wrap_mode: WrapMode::None,
+            width: 120.0,
+            height: 40.0,
+            offset_x: 10.0,
+            offset_y: 5.0,
+        },
+    )])]);
+
+    let output = generate_typst(&doc).unwrap();
+
+    assert!(
+        output
+            .source
+            .contains("#box(width: 120pt, height: 40pt, inset: 0pt)["),
+        "Expected floating text box bounds to use a zero-inset box, got:\n{}",
+        output.source
+    );
+    assert!(
+        output
+            .source
+            .contains("#place(top + left, dy: -6pt)[\n#block(width: 120pt)["),
+        "Expected floating text box content to be placed at the top-left of its bounds, got:\n{}",
+        output.source
+    );
+}
+
+#[test]
+fn test_consecutive_floating_shapes_share_one_anchor_line() {
+    let shape = Shape {
+        kind: ShapeKind::Rectangle,
+        fill: Some(Color::new(114, 159, 207)),
+        gradient_fill: None,
+        stroke: None,
+        rotation_deg: None,
+        opacity: None,
+        shadow: None,
+    };
+    let doc = make_doc(vec![make_flow_page(vec![
+        Block::FloatingShape(FloatingShape {
+            shape: shape.clone(),
+            width: 100.0,
+            height: 40.0,
+            offset_x: 20.0,
+            offset_y: 10.0,
+            wrap_mode: WrapMode::None,
+        }),
+        Block::FloatingShape(FloatingShape {
+            shape,
+            width: 100.0,
+            height: 40.0,
+            offset_x: 160.0,
+            offset_y: 10.0,
+            wrap_mode: WrapMode::None,
+        }),
+    ])]);
+
+    let output = generate_typst(&doc).unwrap();
+    let anchor_count = output
+        .source
+        .matches("#box(width: 0pt, height: 0pt)")
+        .count();
+
+    assert_eq!(
+        anchor_count, 1,
+        "Consecutive floating shapes from one DOCX paragraph should share one anchor line. Got:\n{}",
+        output.source
+    );
+    assert!(
+        output.source.contains("dx: 20pt, dy: 10pt")
+            && output.source.contains("dx: 160pt, dy: 10pt"),
+        "Expected both floating shapes to remain in the shared anchor group. Got:\n{}",
+        output.source
+    );
+}
+
+#[test]
 fn test_codegen_display_math() {
     let doc = make_doc(vec![make_flow_page(vec![Block::MathEquation(
         MathEquation {

@@ -17,7 +17,6 @@ struct ResolvedListLevel {
 
 #[derive(Debug, Clone)]
 pub(super) struct ResolvedNumbering {
-    kind: ListKind,
     levels: BTreeMap<u32, ResolvedListLevel>,
 }
 
@@ -186,13 +185,7 @@ fn resolve_numbering(
         })
         .collect();
 
-    let kind = levels
-        .get(&0)
-        .map(|level| level.style.kind)
-        .or_else(|| levels.values().next().map(|level| level.style.kind))
-        .unwrap_or(ListKind::Unordered);
-
-    ResolvedNumbering { kind, levels }
+    ResolvedNumbering { levels }
 }
 
 pub(super) fn build_numbering_map(numberings: &docx_rs::Numberings) -> NumberingMap {
@@ -228,26 +221,46 @@ pub(super) enum TaggedElement {
     ListParagraph { info: NumInfo, paragraph: Paragraph },
 }
 
-fn finalize_list(num_id: usize, mut items: Vec<ListItem>, numberings: &NumberingMap) -> List {
-    let resolved = numberings.get(&num_id);
+/// A list item paired with the `numId` of the paragraph it came from, so a
+/// merged list can resolve per-item numbering across differing `numId`s.
+struct NumberedItem {
+    num_id: usize,
+    item: ListItem,
+}
 
-    let kind = resolved
-        .map(|numbering| numbering.kind)
+fn finalize_list(numbered_items: Vec<NumberedItem>, numberings: &NumberingMap) -> List {
+    // Build merged per-level styles from every numId present. The first item
+    // encountered at a given level establishes that level's style — adjacent
+    // list paragraphs authored with different numIds (common in pandoc/
+    // LibreOffice output, issue #176) thus share one coherent style map.
+    let mut level_styles: BTreeMap<u32, ListLevelStyle> = BTreeMap::new();
+    for numbered in &numbered_items {
+        if let Some(resolved) = numberings.get(&numbered.num_id)
+            && let Some(resolved_level) = resolved.levels.get(&numbered.item.level)
+        {
+            level_styles
+                .entry(numbered.item.level)
+                .or_insert_with(|| resolved_level.style.clone());
+        }
+    }
+
+    // The overall list kind follows level 0 (or the shallowest level present).
+    let kind = level_styles
+        .get(&0)
+        .map(|style| style.kind)
+        .or_else(|| level_styles.values().next().map(|style| style.kind))
         .unwrap_or(ListKind::Unordered);
-    let level_styles = resolved
-        .map(|numbering| {
-            numbering
-                .levels
-                .iter()
-                .map(|(level, resolved_level)| (*level, resolved_level.style.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
 
+    // Ordered levels restart at their configured `start` only when first seen or
+    // re-entered at a deeper level; otherwise the counter continues across the
+    // merged items so "1." then "2." is preserved instead of "1." then "1.".
+    let mut items: Vec<ListItem> = Vec::with_capacity(numbered_items.len());
     let mut previous_level: Option<u32> = None;
-    for item in &mut items {
-        let level_style = resolved.and_then(|numbering| numbering.levels.get(&item.level));
-        item.start_at = match (level_style, previous_level) {
+    for NumberedItem { num_id, mut item } in numbered_items {
+        let resolved_level = numberings
+            .get(&num_id)
+            .and_then(|numbering| numbering.levels.get(&item.level));
+        item.start_at = match (resolved_level, previous_level) {
             (Some(level), None) if level.style.kind == ListKind::Ordered => Some(level.start),
             (Some(level), Some(previous_level))
                 if level.style.kind == ListKind::Ordered && item.level > previous_level =>
@@ -257,6 +270,7 @@ fn finalize_list(num_id: usize, mut items: Vec<ListItem>, numberings: &Numbering
             _ => None,
         };
         previous_level = Some(item.level);
+        items.push(item);
     }
 
     List {
@@ -266,53 +280,43 @@ fn finalize_list(num_id: usize, mut items: Vec<ListItem>, numberings: &Numbering
     }
 }
 
-/// Group consecutive list paragraphs (with the same numId) into List blocks.
-/// Non-list elements pass through unchanged.
+/// Group consecutive list paragraphs into List blocks. Adjacent list paragraphs
+/// are merged into a single list even when their `numId` differs, so ordered
+/// numbering continues and `ilvl` nesting is preserved (issue #176). Any
+/// non-list element ends the current list.
 pub(super) fn group_into_lists(
     elements: Vec<TaggedElement>,
     numberings: &NumberingMap,
 ) -> Vec<Block> {
     let mut result: Vec<Block> = Vec::new();
-    let mut current_list: Option<(usize, Vec<ListItem>)> = None;
+    let mut current_list: Vec<NumberedItem> = Vec::new();
 
     for element in elements {
         match element {
             TaggedElement::ListParagraph { info, paragraph } => {
-                if let Some((current_num_id, ref mut items)) = current_list {
-                    if info.num_id == current_num_id {
-                        items.push(ListItem {
-                            content: vec![paragraph],
-                            level: info.level,
-                            start_at: None,
-                        });
-                        continue;
-                    }
-                    result.push(Block::List(finalize_list(
-                        current_num_id,
-                        std::mem::take(items),
-                        numberings,
-                    )));
-                }
-                current_list = Some((
-                    info.num_id,
-                    vec![ListItem {
+                current_list.push(NumberedItem {
+                    num_id: info.num_id,
+                    item: ListItem {
                         content: vec![paragraph],
                         level: info.level,
                         start_at: None,
-                    }],
-                ));
+                    },
+                });
             }
             TaggedElement::Plain(blocks) => {
-                if let Some((num_id, items)) = current_list.take() {
-                    result.push(Block::List(finalize_list(num_id, items, numberings)));
+                if !current_list.is_empty() {
+                    result.push(Block::List(finalize_list(
+                        std::mem::take(&mut current_list),
+                        numberings,
+                    )));
                 }
                 result.extend(blocks);
             }
         }
     }
 
-    if let Some((num_id, items)) = current_list {
-        result.push(Block::List(finalize_list(num_id, items, numberings)));
+    if !current_list.is_empty() {
+        result.push(Block::List(finalize_list(current_list, numberings)));
     }
 
     result

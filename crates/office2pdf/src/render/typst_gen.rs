@@ -8,10 +8,10 @@ use crate::error::ConvertError;
 use crate::ir::{
     Alignment, ArrowHead, Block, BorderLineStyle, BorderSide, CellBorder, CellVerticalAlign, Chart,
     ChartType, Color, ColumnLayout, Document, FixedElement, FixedElementKind, FixedPage,
-    FloatingImage, FloatingTextBox, FlowPage, GradientFill, HFInline, HeaderFooter, ImageCrop,
-    ImageData, ImageFormat, Insets, LineSpacing, List, ListKind, Margins, MathEquation, Metadata,
-    Page, PageSize, Paragraph, ParagraphStyle, Run, Shadow, Shape, ShapeKind, SheetPage, SmartArt,
-    TabAlignment, TabLeader, TabStop, Table, TableCell, TableRow, TextBoxData,
+    FloatingImage, FloatingShape, FloatingTextBox, FlowPage, GradientFill, HFInline, HeaderFooter,
+    ImageCrop, ImageData, ImageFormat, Insets, LineSpacing, List, ListKind, Margins, MathEquation,
+    Metadata, Page, PageSize, Paragraph, ParagraphStyle, Run, Shadow, Shape, ShapeKind, SheetPage,
+    SmartArt, TabAlignment, TabLeader, TabStop, Table, TableCell, TableRow, TextBoxData,
     TextBoxVerticalAlign, TextDirection, TextStyle, VerticalTextAlign, WrapMode,
 };
 
@@ -59,6 +59,8 @@ pub struct TypstOutput {
 
 /// Maximum nesting depth for tables-within-tables, matching the parser limit.
 const MAX_TABLE_DEPTH: usize = 64;
+/// Typst's line box leaves more top leading than Word/LibreOffice text frames.
+const FLOATING_TEXT_BOX_TOP_LEADING_COMPENSATION_PT: f64 = 6.0;
 
 /// Internal context for tracking image assets during code generation.
 struct GenCtx {
@@ -873,13 +875,64 @@ fn generate_blocks(
     blocks: &[Block],
     ctx: &mut GenCtx,
 ) -> Result<(), ConvertError> {
-    for (i, block) in blocks.iter().enumerate() {
-        if i > 0 {
+    let mut index: usize = 0;
+    while index < blocks.len() {
+        if index > 0 {
             out.push('\n');
         }
-        generate_block(out, block, ctx)?;
+
+        if is_zero_size_floating_anchor(&blocks[index]) {
+            let consumed = generate_floating_anchor_group(out, &blocks[index..], ctx)?;
+            index += consumed;
+            continue;
+        }
+
+        generate_block(out, &blocks[index], ctx)?;
+        index += 1;
     }
+
     Ok(())
+}
+
+fn is_zero_size_floating_anchor(block: &Block) -> bool {
+    match block {
+        Block::FloatingShape(shape) => matches!(
+            shape.wrap_mode,
+            WrapMode::Behind | WrapMode::InFront | WrapMode::None
+        ),
+        Block::FloatingTextBox(text_box) => matches!(
+            text_box.wrap_mode,
+            WrapMode::Behind | WrapMode::InFront | WrapMode::None
+        ),
+        _ => false,
+    }
+}
+
+fn generate_floating_anchor_group(
+    out: &mut String,
+    blocks: &[Block],
+    ctx: &mut GenCtx,
+) -> Result<usize, ConvertError> {
+    out.push_str("#box(width: 0pt, height: 0pt)[\n");
+    let mut consumed: usize = 0;
+
+    for block in blocks {
+        if !is_zero_size_floating_anchor(block) {
+            break;
+        }
+
+        match block {
+            Block::FloatingShape(shape) => generate_floating_shape_overlay(out, shape),
+            Block::FloatingTextBox(text_box) => {
+                generate_floating_text_box_overlay(out, text_box, ctx)?;
+            }
+            _ => unreachable!("checked by is_zero_size_floating_anchor"),
+        }
+        consumed += 1;
+    }
+
+    out.push_str("]\n");
+    Ok(consumed)
 }
 
 fn generate_block(out: &mut String, block: &Block, ctx: &mut GenCtx) -> Result<(), ConvertError> {
@@ -907,6 +960,10 @@ fn generate_block(out: &mut String, block: &Block, ctx: &mut GenCtx) -> Result<(
             Ok(())
         }
         Block::FloatingTextBox(ftb) => generate_floating_text_box(out, ftb, ctx),
+        Block::FloatingShape(fs) => {
+            generate_floating_shape(out, fs);
+            Ok(())
+        }
         Block::List(list) => generate_list(out, list),
         Block::MathEquation(math) => {
             generate_math_equation(out, math);
@@ -1079,13 +1136,12 @@ fn generate_floating_text_box(
             out.push_str("]\n");
         }
         WrapMode::Behind | WrapMode::InFront | WrapMode::None => {
-            let _ = writeln!(
-                out,
-                "#place(top + left, dx: {}pt, dy: {}pt)[",
-                format_f64(ftb.offset_x),
-                format_f64(ftb.offset_y)
-            );
-            generate_floating_text_box_content(out, ftb, ctx)?;
+            // Anchor to the current flow position (the box's paragraph), not the
+            // page, by wrapping `#place` in a zero-size box. Without this the
+            // box piles at the page top, away from the shapes it belongs with
+            // (issue #176).
+            out.push_str("#box(width: 0pt, height: 0pt)[\n");
+            generate_floating_text_box_overlay(out, ftb, ctx)?;
             out.push_str("]\n");
         }
         WrapMode::Square | WrapMode::Tight => {
@@ -1103,6 +1159,48 @@ fn generate_floating_text_box(
     Ok(())
 }
 
+/// Generate Typst markup for a floating geometric shape (issue #176).
+///
+/// The DOCX anchor positions the shape relative to its paragraph (`positionV
+/// relativeFrom="paragraph"`) and the text column (`positionH
+/// relativeFrom="column"`), not the page. A bare `#place(top + left, …)` at the
+/// document top level anchors to the page, piling every shape at the top. To
+/// anchor to the current flow position instead, the `#place` is wrapped in a
+/// zero-size `#box`, whose top-left sits exactly where the anchoring paragraph
+/// is laid out. Word-processing shapes use `wrapNone`, so no float is needed.
+fn generate_floating_shape(out: &mut String, fs: &FloatingShape) {
+    out.push_str("#box(width: 0pt, height: 0pt)[\n");
+    generate_floating_shape_overlay(out, fs);
+    out.push_str("]\n");
+}
+
+fn generate_floating_shape_overlay(out: &mut String, fs: &FloatingShape) {
+    let _ = write!(
+        out,
+        "#place(top + left, dx: {}pt, dy: {}pt)[",
+        format_f64(fs.offset_x),
+        format_f64(fs.offset_y)
+    );
+    shapes::generate_shape(out, &fs.shape, fs.width, fs.height);
+    out.push_str("]\n");
+}
+
+fn generate_floating_text_box_overlay(
+    out: &mut String,
+    ftb: &FloatingTextBox,
+    ctx: &mut GenCtx,
+) -> Result<(), ConvertError> {
+    let _ = writeln!(
+        out,
+        "#place(top + left, dx: {}pt, dy: {}pt)[",
+        format_f64(ftb.offset_x),
+        format_f64(ftb.offset_y)
+    );
+    generate_floating_text_box_content(out, ftb, ctx)?;
+    out.push_str("]\n");
+    Ok(())
+}
+
 fn generate_floating_text_box_content(
     out: &mut String,
     ftb: &FloatingTextBox,
@@ -1110,9 +1208,15 @@ fn generate_floating_text_box_content(
 ) -> Result<(), ConvertError> {
     let _ = writeln!(
         out,
-        "#block(width: {}pt, height: {}pt)[",
+        "#box(width: {}pt, height: {}pt, inset: 0pt)[",
         format_f64(ftb.width),
         format_f64(ftb.height)
+    );
+    let _ = writeln!(
+        out,
+        "#place(top + left, dy: -{}pt)[\n#block(width: {}pt)[",
+        format_f64(FLOATING_TEXT_BOX_TOP_LEADING_COMPENSATION_PT),
+        format_f64(ftb.width)
     );
     for (index, block) in ftb.content.iter().enumerate() {
         if index > 0 {
@@ -1120,7 +1224,7 @@ fn generate_floating_text_box_content(
         }
         generate_fixed_text_box_block(out, block, ctx, Some(ftb.width), false)?;
     }
-    out.push_str("]\n");
+    out.push_str("]\n]\n]\n");
     Ok(())
 }
 

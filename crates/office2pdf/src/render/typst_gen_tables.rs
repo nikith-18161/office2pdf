@@ -32,6 +32,10 @@ fn generate_table_inner(
 ) -> Result<(), ConvertError> {
     out.push_str("#table(\n");
 
+    if table_has_explicit_cell_borders(table) {
+        out.push_str("  stroke: none,\n");
+    }
+
     if let Some(padding) = table.default_cell_padding {
         let _ = writeln!(out, "  inset: {},", format_insets(&padding));
     }
@@ -98,6 +102,21 @@ fn generate_table_inner(
 
     out.push_str(")\n");
     Ok(())
+}
+
+fn table_has_explicit_cell_borders(table: &Table) -> bool {
+    table.rows.iter().any(|row| {
+        row.cells
+            .iter()
+            .any(|cell| cell.border.as_ref().is_some_and(cell_border_has_side))
+    })
+}
+
+fn cell_border_has_side(border: &CellBorder) -> bool {
+    border.top.is_some()
+        || border.bottom.is_some()
+        || border.left.is_some()
+        || border.right.is_some()
 }
 
 fn generate_table_rows(
@@ -298,6 +317,7 @@ fn generate_cell_content(
             Block::Image(img) => generate_image(out, img, ctx),
             Block::FloatingImage(fi) => generate_floating_image(out, fi, ctx),
             Block::FloatingTextBox(ftb) => generate_floating_text_box(out, ftb, ctx)?,
+            Block::FloatingShape(fs) => generate_floating_shape(out, fs),
             Block::List(list) => {
                 if can_render_fixed_text_list_inline(list) {
                     generate_fixed_text_list(out, list, true, None)?;
@@ -314,5 +334,51 @@ fn generate_cell_content(
 }
 
 fn generate_cell_paragraph(out: &mut String, para: &Paragraph) {
-    generate_runs_with_tabs(out, &para.runs, para.style.tab_stops.as_deref());
+    let style: &ParagraphStyle = &para.style;
+    let alignment = style.alignment;
+    let align_str: Option<&str> = match alignment {
+        Some(Alignment::Left) => Some("left"),
+        Some(Alignment::Center) => Some("center"),
+        Some(Alignment::Right) => Some("right"),
+        _ => None,
+    };
+    let has_block_wrapper = cell_paragraph_needs_block_wrapper(style) || align_str.is_some();
+
+    if has_block_wrapper {
+        out.push_str("#block(");
+        write_cell_paragraph_block_params(out, align_str.is_some());
+        out.push_str(")[\n");
+        write_par_settings(out, style);
+        if let Some(align_str) = align_str {
+            let _ = writeln!(out, "  #set align({align_str})");
+        }
+    }
+
+    if let Some(space_before) = style.space_before {
+        let _ = writeln!(out, "#v({}pt)", format_f64(space_before));
+    }
+
+    generate_runs_with_tabs(out, &para.runs, style.tab_stops.as_deref());
+
+    if let Some(space_after) = style.space_after {
+        let _ = write!(out, "\n#v({}pt)", format_f64(space_after));
+    }
+
+    if has_block_wrapper {
+        out.push_str("\n]");
+    }
+}
+
+fn cell_paragraph_needs_block_wrapper(style: &ParagraphStyle) -> bool {
+    style.line_spacing.is_some()
+        || matches!(style.alignment, Some(Alignment::Justify))
+        || matches!(style.direction, Some(TextDirection::Rtl))
+}
+
+fn write_cell_paragraph_block_params(out: &mut String, needs_full_width: bool) {
+    let mut first = true;
+
+    if needs_full_width {
+        write_param(out, &mut first, "width: 100%");
+    }
 }

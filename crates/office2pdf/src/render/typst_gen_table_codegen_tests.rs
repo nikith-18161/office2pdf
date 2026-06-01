@@ -447,6 +447,57 @@ fn test_table_with_cell_borders() {
 }
 
 #[test]
+fn test_table_with_partial_cell_borders_does_not_fill_missing_grid_lines() {
+    let header_cell = TableCell {
+        content: vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle::default(),
+            runs: vec![Run {
+                text: "Header".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })],
+        border: Some(CellBorder {
+            top: None,
+            bottom: Some(BorderSide {
+                width: 1.0,
+                color: Color::black(),
+                style: BorderLineStyle::Solid,
+            }),
+            left: None,
+            right: None,
+        }),
+        ..TableCell::default()
+    };
+    let table = Table {
+        rows: vec![
+            TableRow {
+                cells: vec![header_cell],
+                height: None,
+            },
+            TableRow {
+                cells: vec![make_text_cell("Body")],
+                height: None,
+            },
+        ],
+        column_widths: vec![200.0],
+        ..Table::default()
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::Table(table)])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("stroke: none"),
+        "Expected table default stroke to be disabled so unbordered cells stay unbordered: {result}"
+    );
+    assert!(
+        result.contains("stroke: (bottom: 1pt + rgb(0, 0, 0))"),
+        "Expected explicit bottom border to remain on the header cell: {result}"
+    );
+}
+
+#[test]
 fn test_table_with_styled_text_in_cell() {
     let styled_cell = TableCell {
         content: vec![Block::Paragraph(Paragraph {
@@ -481,6 +532,75 @@ fn test_table_with_styled_text_in_cell() {
     assert!(
         result.contains("size: 14pt"),
         "Expected font size in table cell: {result}"
+    );
+}
+
+#[test]
+fn test_table_cell_paragraph_preserves_right_alignment() {
+    let right_cell = TableCell {
+        content: vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle {
+                alignment: Some(Alignment::Right),
+                ..ParagraphStyle::default()
+            },
+            runs: vec![Run {
+                text: "N".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })],
+        ..TableCell::default()
+    };
+    let table = Table {
+        rows: vec![TableRow {
+            cells: vec![make_text_cell("greek"), right_cell],
+            height: None,
+        }],
+        column_widths: vec![100.0, 100.0],
+        ..Table::default()
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::Table(table)])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("#block(width: 100%)") && result.contains("#set align(right)"),
+        "Expected table cell paragraph to preserve right alignment: {result}"
+    );
+}
+
+#[test]
+fn test_table_cell_paragraph_preserves_spacing() {
+    let spaced_cell = TableCell {
+        content: vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle {
+                space_before: Some(2.0),
+                space_after: Some(3.0),
+                ..ParagraphStyle::default()
+            },
+            runs: vec![Run {
+                text: "Header".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })],
+        ..TableCell::default()
+    };
+    let table = Table {
+        rows: vec![TableRow {
+            cells: vec![spaced_cell],
+            height: None,
+        }],
+        column_widths: vec![100.0],
+        ..Table::default()
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::Table(table)])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("#v(2pt)") && result.contains("#v(3pt)"),
+        "Expected table cell paragraph spacing to be preserved: {result}"
     );
 }
 

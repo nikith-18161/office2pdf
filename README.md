@@ -11,7 +11,7 @@ No LibreOffice, no Chromium, no Docker — just a single binary powered by [Typs
 
 ## Features
 
-- **DOCX** — paragraphs, inline formatting (bold/italic/underline/color), tables, images, lists, headers/footers, page setup
+- **DOCX** — paragraphs, inline formatting (bold/italic/underline/color), tables, images, drawing shapes, ordered/nested lists, syntax-highlighted code, headers/footers, page setup
 - **PPTX** — slides, text boxes, shapes, tables (with theme-based table styles), images, slide masters, speaker notes, gradient backgrounds, shadow/reflection effects
 - **XLSX** — sheets, cell formatting, merged cells, column widths, row heights, conditional formatting (DataBar, IconSet)
 - **PDF/A-2b** — archival-compliant output via `--pdf-a`
@@ -128,7 +128,7 @@ Available functions: `convertToPdf(data, format)`, `convertDocxToPdf(data)`, `co
 
 | Format | Status | Key Features |
 |--------|--------|-------------|
-| DOCX | Supported | Text, tables, images, lists, headers/footers, page setup |
+| DOCX | Supported | Text, tables, images, drawing shapes, lists, code highlighting, headers/footers, page setup |
 | PPTX | Supported | Slides, text boxes, shapes, tables, images, masters, gradients, effects |
 | XLSX | Supported | Sheets, formatting, merged cells, column/row sizing, conditional formatting |
 

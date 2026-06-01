@@ -48,32 +48,50 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
     );
 
     for style in &styles.styles {
-        if style.style_type != docx_rs::StyleType::Paragraph {
-            continue;
+        match style.style_type {
+            docx_rs::StyleType::Paragraph => {
+                let text = merge_text_style(
+                    &extract_run_style(&style.run_property),
+                    map.get(DOC_DEFAULT_STYLE_ID),
+                );
+                let paragraph = extract_paragraph_style(&style.paragraph_property);
+                let paragraph_tab_overrides =
+                    extract_tab_stop_overrides(&style.paragraph_property.tabs);
+                let heading_level = style
+                    .paragraph_property
+                    .outline_lvl
+                    .as_ref()
+                    .map(|outline_level| outline_level.v)
+                    .filter(|&value| value < 6);
+
+                map.insert(
+                    style.style_id.clone(),
+                    ResolvedStyle {
+                        text,
+                        paragraph,
+                        paragraph_tab_overrides,
+                        heading_level,
+                    },
+                );
+            }
+            // Character styles (e.g. pandoc's `BuiltInTok`/`StringTok` syntax
+            // highlighting tokens) contribute only run-level text properties.
+            // They deliberately do NOT inherit document defaults, so that
+            // overlaying a run's `rStyle` onto its paragraph style changes only
+            // the properties the character style actually sets (issue #176).
+            docx_rs::StyleType::Character => {
+                map.insert(
+                    style.style_id.clone(),
+                    ResolvedStyle {
+                        text: extract_run_style(&style.run_property),
+                        paragraph: ParagraphStyle::default(),
+                        paragraph_tab_overrides: None,
+                        heading_level: None,
+                    },
+                );
+            }
+            _ => {}
         }
-
-        let text = merge_text_style(
-            &extract_run_style(&style.run_property),
-            map.get(DOC_DEFAULT_STYLE_ID),
-        );
-        let paragraph = extract_paragraph_style(&style.paragraph_property);
-        let paragraph_tab_overrides = extract_tab_stop_overrides(&style.paragraph_property.tabs);
-        let heading_level = style
-            .paragraph_property
-            .outline_lvl
-            .as_ref()
-            .map(|outline_level| outline_level.v)
-            .filter(|&value| value < 6);
-
-        map.insert(
-            style.style_id.clone(),
-            ResolvedStyle {
-                text,
-                paragraph,
-                paragraph_tab_overrides,
-                heading_level,
-            },
-        );
     }
 
     map

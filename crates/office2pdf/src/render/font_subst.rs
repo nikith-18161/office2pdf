@@ -308,6 +308,7 @@ fn visit_block_fonts(block: &Block, visitor: &mut impl FnMut(&str) -> bool) -> b
         }),
         Block::Image(_)
         | Block::FloatingImage(_)
+        | Block::FloatingShape(_)
         | Block::MathEquation(_)
         | Block::Chart(_)
         | Block::PageBreak

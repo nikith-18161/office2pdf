@@ -505,6 +505,145 @@ fn test_parse_mixed_list_and_paragraphs() {
     assert!(para_count >= 1, "Expected at least 1 paragraph block");
 }
 
+#[test]
+fn test_merges_adjacent_lists_with_different_num_ids() {
+    // pandoc/LibreOffice fragment a single logical list across several numIds
+    // (issue #176). Adjacent list paragraphs must merge into one list so ordered
+    // numbering continues (1., 2.) instead of restarting, and `ilvl` nesting is
+    // preserved instead of flattening into a separate bullet list.
+    // One abstract: ordered level 0, bulleted level 1 — the same shape the
+    // passing `test_parse_mixed_ordered_and_bulleted_levels` relies on, so its
+    // resolution is trusted. Two distinct numIds both reference it, mirroring
+    // the issue's document where consecutive items carry different numId values.
+    let abstract_num = docx_rs::AbstractNumbering::new(0)
+        .add_level(docx_rs::Level::new(
+            0,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("decimal"),
+            docx_rs::LevelText::new("%1."),
+            docx_rs::LevelJc::new("left"),
+        ))
+        .add_level(docx_rs::Level::new(
+            1,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("bullet"),
+            docx_rs::LevelText::new("\u{2022}"),
+            docx_rs::LevelJc::new("left"),
+        ));
+
+    let data = build_docx_with_numbering(
+        vec![abstract_num],
+        vec![docx_rs::Numbering::new(1, 0), docx_rs::Numbering::new(2, 0)],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("First"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Second"))
+                .numbering(docx_rs::NumberingId::new(2), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Sub"))
+                .numbering(docx_rs::NumberingId::new(2), docx_rs::IndentLevel::new(1)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lists.len(),
+        1,
+        "adjacent list paragraphs must merge into a single list"
+    );
+    let list = lists[0];
+    assert_eq!(list.kind, ListKind::Ordered);
+    assert_eq!(list.items.len(), 3);
+    assert_eq!(list.items[0].level, 0);
+    assert_eq!(list.items[0].start_at, Some(1));
+    assert_eq!(list.items[1].level, 0);
+    assert_eq!(
+        list.items[1].start_at, None,
+        "the second ordered item continues counting (-> 2.), it must not restart"
+    );
+    assert_eq!(
+        list.items[2].level, 1,
+        "the sub-item stays nested at level 1"
+    );
+    assert_eq!(
+        list.level_styles.get(&0).map(|style| style.kind),
+        Some(ListKind::Ordered)
+    );
+    assert_eq!(
+        list.level_styles.get(&1).map(|style| style.kind),
+        Some(ListKind::Unordered)
+    );
+}
+
+#[test]
+fn test_preserves_empty_paragraph_after_drawing_only_anchor() {
+    let document_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+<w:body>
+<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing>
+<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+<wp:simplePos x="0" y="0"/>
+<wp:positionH relativeFrom="column"><wp:posOffset>366395</wp:posOffset></wp:positionH>
+<wp:positionV relativeFrom="paragraph"><wp:posOffset>141605</wp:posOffset></wp:positionV>
+<wp:extent cx="1590675" cy="733425"/>
+<wp:wrapNone/>
+<wp:docPr id="1" name="Shape 1"/>
+<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+<wps:wsp><wps:spPr>
+<a:xfrm><a:off x="0" y="0"/><a:ext cx="1590840" cy="733320"/></a:xfrm>
+<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+<a:solidFill><a:srgbClr val="729fcf"/></a:solidFill>
+<a:ln w="0"><a:solidFill><a:srgbClr val="3465a4"/></a:solidFill></a:ln>
+</wps:spPr></wps:wsp>
+</a:graphicData></a:graphic>
+</wp:anchor></w:drawing></mc:Choice></mc:AlternateContent></w:r></w:p>
+<w:p><w:r><w:t>After drawing</w:t></w:r></w:p>
+<w:sectPr/>
+</w:body></w:document>"#;
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser
+        .parse(
+            &build_docx_with_math(document_xml),
+            &ConvertOptions::default(),
+        )
+        .unwrap();
+    let blocks = all_blocks(&doc);
+
+    assert!(
+        matches!(blocks[0], Block::FloatingShape(_)),
+        "drawing-only paragraph should emit the floating shape first"
+    );
+    assert!(
+        matches!(&blocks[1], Block::Paragraph(paragraph) if paragraph.runs.is_empty()),
+        "drawing-only paragraph mark must remain as an empty paragraph spacer"
+    );
+    assert!(
+        matches!(&blocks[2], Block::Paragraph(paragraph) if paragraph.runs[0].text == "After drawing"),
+        "following content should stay after the preserved paragraph mark"
+    );
+}
+
 #[path = "docx_page_feature_tests.rs"]
 mod page_feature_tests;
 

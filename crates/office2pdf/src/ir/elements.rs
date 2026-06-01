@@ -34,6 +34,7 @@ pub enum Block {
     Image(ImageData),
     FloatingImage(FloatingImage),
     FloatingTextBox(FloatingTextBox),
+    FloatingShape(FloatingShape),
     List(List),
     MathEquation(MathEquation),
     Chart(Chart),
@@ -123,6 +124,24 @@ pub struct FloatingTextBox {
     pub offset_x: f64,
     /// Vertical offset in points from the anchor reference.
     pub offset_y: f64,
+}
+
+/// A floating geometric shape (rectangle, line/arrow, ellipse, …) positioned
+/// with an anchor offset. Used for DrawingML word-processing shapes (`wps:wsp`)
+/// that carry geometry but no text box — these have no docx-rs representation
+/// and would otherwise be dropped (issue #176).
+#[derive(Debug, Clone)]
+pub struct FloatingShape {
+    pub shape: Shape,
+    /// On-page bounding-box width in points (from `wp:extent`).
+    pub width: f64,
+    /// On-page bounding-box height in points (from `wp:extent`).
+    pub height: f64,
+    /// Horizontal offset in points from the anchor reference.
+    pub offset_x: f64,
+    /// Vertical offset in points from the anchor reference.
+    pub offset_y: f64,
+    pub wrap_mode: WrapMode,
 }
 
 /// Vertical alignment for fixed text box content.
