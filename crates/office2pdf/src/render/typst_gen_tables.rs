@@ -215,14 +215,7 @@ fn generate_table_cell(
         let _ = write!(out, "{} ", icon);
     }
 
-    if cell.wrap_text {
-        generate_cell_content(out, &cell.content, ctx)?;
-    } else {
-        // Clip overflow — text stays within column width.
-        out.push_str("#box(width: 100%, clip: true)[");
-        generate_cell_content(out, &cell.content, ctx)?;
-        out.push(']');
-    }
+    generate_cell_content(out, &cell.content, ctx)?;
 
     out.push_str("],\n");
     Ok(())
@@ -323,6 +316,13 @@ fn format_border_side(side: &BorderSide) -> String {
     );
     match side.style {
         BorderLineStyle::Solid | BorderLineStyle::None => base,
+        BorderLineStyle::Double => format!(
+            "(paint: rgb({}, {}, {}), thickness: {}pt)",
+            side.color.r,
+            side.color.g,
+            side.color.b,
+            format_f64(side.width * 2.5),
+        ),
         _ => format!(
             "(paint: rgb({}, {}, {}), thickness: {}pt, dash: \"{}\")",
             side.color.r,
