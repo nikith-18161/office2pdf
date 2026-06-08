@@ -30,10 +30,15 @@ pub(super) struct MergeInfo {
 pub(super) const DEFAULT_COLUMN_WIDTH: f64 = 8.43;
 
 /// Convert Excel column width (character units) to points.
-/// Excel character width ≈ 7 pixels at 96 DPI, 1 point = 96/72 pixels.
-/// Empirically: width_pt ≈ char_width * 7.0 (approximate, close to Excel's rendering).
+///
+/// OOXML stores column width as "number of characters" using the maximum digit
+/// width (MDW) of the Normal style font. For Calibri 11pt (Excel default),
+/// MDW ≈ 7px. Excel also adds 5px of padding per column.
+///
+/// Formula: pt = (char_width * MDW + padding) * (72 / 96)
+///           pt = (char_width * 7.0 + 5.0) * 0.75
 pub(super) fn column_width_to_pt(char_width: f64) -> f64 {
-    char_width * 7.0
+    (char_width * 7.0 + 5.0) * 0.75
 }
 
 /// Parse an Excel column letter string (e.g., "A", "B", "AA") into a 1-indexed column number.
@@ -238,9 +243,9 @@ pub(super) fn build_rows_for_range(
             // an alignment element exists, even if the vertical attribute was not specified.
             // This causes mixed alignment within rows. Excel's default for all cells is
             // bottom; consider applying that uniformly as a follow-up fix.
-            let (mut horizontal_align, vertical_align, wrap_text) = umya_cell
+            let (mut horizontal_align, vertical_align) = umya_cell
                 .map(extract_cell_alignment)
-                .unwrap_or((None, None, false));
+                .unwrap_or((None, None));
             if horizontal_align.is_none() && is_numeric {
                 horizontal_align = Some(CellHorizontalAlign::Right);
             }
@@ -255,7 +260,6 @@ pub(super) fn build_rows_for_range(
                 icon_text,
                 vertical_align,
                 horizontal_align,
-                wrap_text,
                 padding: None,
             });
         }

@@ -257,6 +257,7 @@ fn write_cell_params(out: &mut String, cell: &TableCell, clamped_colspan: u32) {
                 CellHorizontalAlign::Left => "left",
                 CellHorizontalAlign::Center => "center",
                 CellHorizontalAlign::Right => "right",
+                CellHorizontalAlign::Justify => "justify",
             };
             Some(format!("align: {h} + {v}"))
         }
@@ -273,6 +274,7 @@ fn write_cell_params(out: &mut String, cell: &TableCell, clamped_colspan: u32) {
                 CellHorizontalAlign::Left => "left",
                 CellHorizontalAlign::Center => "center",
                 CellHorizontalAlign::Right => "right",
+                CellHorizontalAlign::Justify => "justify",
             };
             Some(format!("align: {h}"))
         }

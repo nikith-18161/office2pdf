@@ -77,9 +77,9 @@ pub(super) fn extract_cell_text_style(cell: &umya_spreadsheet::Cell) -> TextStyl
 }
 pub(super) fn extract_cell_alignment(
     cell: &umya_spreadsheet::Cell,
-) -> (Option<CellHorizontalAlign>, Option<CellVerticalAlign>, bool) {
+) -> (Option<CellHorizontalAlign>, Option<CellVerticalAlign>) {
     let Some(alignment) = cell.get_style().get_alignment() else {
-        return (None, None, false);
+        return (None, None);
     };
 
     let horizontal = match alignment.get_horizontal() {
@@ -91,6 +91,13 @@ pub(super) fn extract_cell_alignment(
         }
         umya_spreadsheet::structs::HorizontalAlignmentValues::Right => {
             Some(CellHorizontalAlign::Right)
+        }
+        umya_spreadsheet::structs::HorizontalAlignmentValues::Justify => {
+            Some(CellHorizontalAlign::Justify)
+        }
+        umya_spreadsheet::structs::HorizontalAlignmentValues::Distributed => {
+            // Distributed spreads text evenly; approximate with justify.
+            Some(CellHorizontalAlign::Justify)
         }
         _ => None,
     };
@@ -106,9 +113,7 @@ pub(super) fn extract_cell_alignment(
         _ => None::<CellVerticalAlign>,
     };
 
-    let wrap_text = *alignment.get_wrap_text();
-
-    (horizontal, vertical, wrap_text)
+    (horizontal, vertical)
 }
 /// Extract background color from a cell's style.
 pub(super) fn extract_cell_background(cell: &umya_spreadsheet::Cell) -> Option<Color> {

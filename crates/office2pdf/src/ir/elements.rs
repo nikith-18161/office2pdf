@@ -19,6 +19,8 @@ pub enum CellHorizontalAlign {
     Left,
     Center,
     Right,
+    /// Justify alignment (also used for Distributed, which approximates justify).
+    Justify,
 }
 
 /// An inline element within a header or footer paragraph.
@@ -306,8 +308,6 @@ pub struct TableCell {
     pub padding: Option<Insets>,
     /// Horizontal alignment of cell content.
     pub horizontal_align: Option<CellHorizontalAlign>,
-    /// Whether cell text should wrap within the column width.
-    pub wrap_text: bool,
 }
 
 impl Default for TableCell {
@@ -323,7 +323,6 @@ impl Default for TableCell {
             vertical_align: None,
             padding: None,
             horizontal_align: None,
-            wrap_text: false,
         }
     }
 }
