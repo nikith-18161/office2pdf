@@ -174,6 +174,7 @@ fn paragraph_style_merge_from_all_none_source_preserves_target() {
         indent_left: Some(10.0),
         indent_right: Some(5.0),
         indent_first_line: Some(20.0),
+        font_size: Some(11.0),
         line_spacing: Some(LineSpacing::Proportional(1.5)),
         space_before: Some(6.0),
         space_after: Some(12.0),
@@ -194,6 +195,7 @@ fn paragraph_style_merge_from_all_none_source_preserves_target() {
     assert_eq!(target.indent_left, original.indent_left);
     assert_eq!(target.indent_right, original.indent_right);
     assert_eq!(target.indent_first_line, original.indent_first_line);
+    assert_eq!(target.font_size, original.font_size);
     assert_eq!(target.space_before, original.space_before);
     assert_eq!(target.space_after, original.space_after);
     assert_eq!(target.heading_level, original.heading_level);
@@ -206,6 +208,7 @@ fn paragraph_style_merge_from_all_some_source_overwrites_target() {
     let mut target = ParagraphStyle {
         alignment: Some(Alignment::Left),
         indent_left: Some(10.0),
+        font_size: Some(10.0),
         space_before: Some(6.0),
         ..ParagraphStyle::default()
     };
@@ -214,6 +217,7 @@ fn paragraph_style_merge_from_all_some_source_overwrites_target() {
         indent_left: Some(20.0),
         indent_right: Some(15.0),
         indent_first_line: Some(30.0),
+        font_size: Some(18.0),
         line_spacing: Some(LineSpacing::Exact(14.0)),
         space_before: Some(8.0),
         space_after: Some(16.0),
@@ -232,6 +236,7 @@ fn paragraph_style_merge_from_all_some_source_overwrites_target() {
     assert_eq!(target.indent_left, Some(20.0));
     assert_eq!(target.indent_right, Some(15.0));
     assert_eq!(target.indent_first_line, Some(30.0));
+    assert_eq!(target.font_size, Some(18.0));
     assert_eq!(target.space_before, Some(8.0));
     assert_eq!(target.space_after, Some(16.0));
     assert_eq!(target.heading_level, Some(1));
@@ -251,11 +256,13 @@ fn paragraph_style_merge_from_partial_overlap() {
     let mut target = ParagraphStyle {
         alignment: Some(Alignment::Left),
         indent_left: Some(10.0),
+        font_size: Some(11.0),
         space_before: Some(6.0),
         ..ParagraphStyle::default()
     };
     let source = ParagraphStyle {
         alignment: Some(Alignment::Center),
+        font_size: Some(18.0),
         space_after: Some(12.0),
         ..ParagraphStyle::default()
     };
@@ -264,6 +271,7 @@ fn paragraph_style_merge_from_partial_overlap() {
 
     assert_eq!(target.alignment, Some(Alignment::Center));
     assert_eq!(target.indent_left, Some(10.0));
+    assert_eq!(target.font_size, Some(18.0));
     assert_eq!(target.space_before, Some(6.0));
     assert_eq!(target.space_after, Some(12.0));
     assert!(target.heading_level.is_none());

@@ -34,6 +34,7 @@ pub(super) fn extract_drawing_image(
         format: ImageFormat::Png,
         width,
         height,
+        alignment: None,
         crop: None,
         stroke: None,
     };
@@ -72,6 +73,7 @@ pub(super) fn extract_shape_image(shape: &docx_rs::Shape, images: &ImageMap) -> 
         format: ImageFormat::Png,
         width,
         height,
+        alignment: None,
         crop: None,
         stroke: None,
     }))

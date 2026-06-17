@@ -524,6 +524,7 @@ fn convert_paragraph_blocks(
 ) {
     // Check bidi direction for this paragraph (must be called once per XML <w:p>)
     let is_rtl = ctx.bidi.next_is_bidi();
+    let image_alignment: Option<Alignment> = extract_paragraph_style(&para.property).alignment;
 
     // Emit page break before the paragraph if requested
     if para.property.page_break_before == Some(true) {
@@ -631,6 +632,12 @@ fn convert_paragraph_blocks(
                 );
             }
             _ => {}
+        }
+    }
+
+    for block in &mut inline_images {
+        if let Block::Image(image) = block {
+            image.alignment = image_alignment;
         }
     }
 

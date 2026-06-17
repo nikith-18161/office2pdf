@@ -16,8 +16,26 @@ fn test_generate_empty_paragraph_reserves_line_height() {
     let result = generate_typst(&doc).unwrap().source;
 
     assert!(
-        result.contains("#v(12pt)"),
+        result.contains("#v(14.399"),
         "empty DOCX paragraph marks should reserve vertical flow space: {result}"
+    );
+}
+
+#[test]
+fn test_generate_empty_paragraph_uses_style_font_size_and_line_spacing() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            font_size: Some(18.0),
+            line_spacing: Some(LineSpacing::Proportional(1.5)),
+            ..ParagraphStyle::default()
+        },
+        runs: Vec::new(),
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("#v(27pt)"),
+        "empty DOCX paragraph marks should use paragraph font size and line spacing: {result}"
     );
 }
 
@@ -281,6 +299,131 @@ fn test_generate_line_spacing_exact() {
     assert!(
         result.contains("leading: 18pt"),
         "Expected exact leading in: {result}"
+    );
+}
+
+#[test]
+fn test_generate_zero_space_after_uses_small_block_buffer() {
+    let doc = make_doc(vec![make_flow_page(vec![
+        Block::Paragraph(Paragraph {
+            style: ParagraphStyle {
+                alignment: Some(Alignment::Center),
+                font_size: Some(18.0),
+                line_spacing: Some(LineSpacing::Proportional(1.15)),
+                space_after: Some(0.0),
+                ..ParagraphStyle::default()
+            },
+            runs: vec![Run {
+                text: "First line".to_string(),
+                style: TextStyle {
+                    bold: Some(true),
+                    ..TextStyle::default()
+                },
+                href: None,
+                footnote: None,
+            }],
+        }),
+        Block::Paragraph(Paragraph {
+            style: ParagraphStyle {
+                alignment: Some(Alignment::Center),
+                font_size: Some(18.0),
+                line_spacing: Some(LineSpacing::Proportional(1.15)),
+                ..ParagraphStyle::default()
+            },
+            runs: vec![Run {
+                text: "Second line".to_string(),
+                style: TextStyle {
+                    bold: Some(true),
+                    ..TextStyle::default()
+                },
+                href: None,
+                footnote: None,
+            }],
+        }),
+    ])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("below: 21.6pt"),
+        "Expected a small nonzero block buffer for zero space_after in: {result}"
+    );
+    assert!(
+        !result.contains("below: 0pt"),
+        "Expected zero space_after to avoid a zero Typst block gap in: {result}"
+    );
+}
+
+#[test]
+fn test_generate_unset_space_after_uses_small_block_buffer() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            alignment: Some(Alignment::Center),
+            font_size: Some(18.0),
+            line_spacing: Some(LineSpacing::Proportional(1.15)),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Centered".to_string(),
+            style: TextStyle {
+                bold: Some(true),
+                ..TextStyle::default()
+            },
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("below: 21.6pt"),
+        "Expected unset space_after to emit a small Typst block buffer in: {result}"
+    );
+}
+
+#[test]
+fn test_generate_positive_space_after_is_preserved() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            font_size: Some(18.0),
+            line_spacing: Some(LineSpacing::Proportional(1.15)),
+            space_after: Some(6.0),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Spaced".to_string(),
+            style: TextStyle::default(),
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("below: 6pt"),
+        "Expected meaningful positive space_after to remain unchanged in: {result}"
+    );
+}
+
+#[test]
+fn test_generate_aligned_block_paragraph_uses_full_width() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            alignment: Some(Alignment::Center),
+            space_after: Some(10.0),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Centered with spacing".to_string(),
+            style: TextStyle::default(),
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+
+    assert!(
+        result.contains("#block(width: 100%, below: 10pt)[\n#align(center)[Centered with spacing]"),
+        "Expected aligned block paragraphs to reserve full width for inner #align in: {result}"
     );
 }
 

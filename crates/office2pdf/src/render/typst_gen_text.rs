@@ -30,7 +30,11 @@ pub(super) fn generate_paragraph(out: &mut String, para: &Paragraph) -> Result<(
     }
 
     if para.runs.is_empty() {
-        out.push_str("#v(12pt)");
+        let _ = write!(
+            out,
+            "#v({}pt)",
+            format_f64(empty_paragraph_height_pt(style))
+        );
         if has_para_style {
             out.push_str("\n]");
         }
@@ -68,6 +72,36 @@ pub(super) fn generate_paragraph(out: &mut String, para: &Paragraph) -> Result<(
     Ok(())
 }
 
+fn natural_single_line_height_pt(style: &ParagraphStyle) -> f64 {
+    let font_size_pt: f64 = style.font_size.unwrap_or(12.0);
+    let default_line_height_pt: f64 = font_size_pt * 1.2;
+
+    match style.line_spacing {
+        Some(LineSpacing::Exact(points)) => default_line_height_pt.max(points),
+        Some(LineSpacing::Proportional(factor)) => {
+            default_line_height_pt.max(font_size_pt * factor)
+        }
+        None => default_line_height_pt,
+    }
+}
+
+fn empty_paragraph_height_pt(style: &ParagraphStyle) -> f64 {
+    natural_single_line_height_pt(style)
+}
+
+fn zero_space_after_block_buffer_pt(style: &ParagraphStyle) -> f64 {
+    let unclamped_buffer_pt = natural_single_line_height_pt(style).clamp(8.0, 24.0);
+    (unclamped_buffer_pt * 100.0).round() / 100.0
+}
+
+fn effective_block_space_after_pt(style: &ParagraphStyle) -> f64 {
+    match style.space_after {
+        Some(space_after) if space_after > 0.0 => space_after,
+        Some(space_after) if space_after < 0.0 => space_after,
+        Some(_) | None => zero_space_after_block_buffer_pt(style),
+    }
+}
+
 pub(super) fn needs_block_wrapper(style: &ParagraphStyle) -> bool {
     style.space_before.is_some()
         || style.space_after.is_some()
@@ -79,10 +113,13 @@ pub(super) fn needs_block_wrapper(style: &ParagraphStyle) -> bool {
 pub(super) fn write_block_params(out: &mut String, style: &ParagraphStyle) {
     let mut first = true;
 
+    write_param(out, &mut first, "width: 100%");
+
     if let Some(above) = style.space_before {
         write_param(out, &mut first, &format!("above: {}pt", format_f64(above)));
     }
-    if let Some(below) = style.space_after {
+    if style.space_after.is_some() || style.line_spacing.is_some() {
+        let below = effective_block_space_after_pt(style);
         write_param(out, &mut first, &format!("below: {}pt", format_f64(below)));
     }
 }

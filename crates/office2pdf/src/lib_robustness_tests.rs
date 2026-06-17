@@ -338,6 +338,7 @@ fn test_edge_image_only_docx() {
                 format: ImageFormat::Png,
                 width: Some(100.0),
                 height: Some(100.0),
+                alignment: None,
                 crop: None,
                 stroke: None,
             })],

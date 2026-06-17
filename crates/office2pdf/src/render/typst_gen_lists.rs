@@ -158,6 +158,7 @@ fn paragraph_styles_match(left: &ParagraphStyle, right: &ParagraphStyle) -> bool
             right.indent_first_line,
             f64_approx_eq,
         )
+        && both_match(left.font_size, right.font_size, f64_approx_eq)
         && both_match(left.line_spacing, right.line_spacing, line_spacing_eq)
         && both_match(left.space_before, right.space_before, f64_approx_eq)
         && both_match(left.space_after, right.space_after, f64_approx_eq)

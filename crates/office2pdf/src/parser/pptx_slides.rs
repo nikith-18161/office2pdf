@@ -668,6 +668,7 @@ fn finalize_picture(
                 format,
                 width: Some(emu_to_pt(pic.cx)),
                 height: Some(emu_to_pt(pic.cy)),
+                alignment: None,
                 crop: pic.crop,
                 stroke: stroke.clone(),
             }),

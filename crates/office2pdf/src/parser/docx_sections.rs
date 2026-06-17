@@ -4,7 +4,7 @@ use std::io::{Read, Seek};
 use crate::error::ConvertWarning;
 use crate::ir::{
     Block, ColumnLayout, FlowPage, HFInline, HeaderFooter, HeaderFooterParagraph, Margins,
-    PageSize, Run, TextStyle,
+    PageSize, ParagraphStyle, Run, TextStyle,
 };
 
 use super::{
@@ -199,33 +199,98 @@ pub(super) fn build_flow_page_from_section(
 }
 
 fn convert_docx_header(header: &docx_rs::Header) -> Option<HeaderFooter> {
-    let paragraphs = header
-        .children
-        .iter()
-        .filter_map(|child| match child {
-            docx_rs::HeaderChild::Paragraph(paragraph) => Some(convert_hf_paragraph(paragraph)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let mut paragraphs = Vec::new();
+    for child in &header.children {
+        match child {
+            docx_rs::HeaderChild::Paragraph(paragraph) => {
+                paragraphs.push(convert_hf_paragraph(paragraph));
+            }
+            docx_rs::HeaderChild::Table(table) => {
+                paragraphs.extend(convert_hf_table_to_paragraphs(table));
+            }
+            docx_rs::HeaderChild::StructuredDataTag(_) => {}
+        }
+    }
+    if paragraphs.is_empty() {
+        return None;
+    }
+    Some(HeaderFooter { paragraphs })
+}
+fn convert_docx_footer(footer: &docx_rs::Footer) -> Option<HeaderFooter> {
+    let mut paragraphs = Vec::new();
+    for child in &footer.children {
+        match child {
+            docx_rs::FooterChild::Paragraph(paragraph) => {
+                paragraphs.push(convert_hf_paragraph(paragraph));
+            }
+            docx_rs::FooterChild::Table(table) => {
+                paragraphs.extend(convert_hf_table_to_paragraphs(table));
+            }
+            docx_rs::FooterChild::StructuredDataTag(_) => {}
+        }
+    }
     if paragraphs.is_empty() {
         return None;
     }
     Some(HeaderFooter { paragraphs })
 }
 
-fn convert_docx_footer(footer: &docx_rs::Footer) -> Option<HeaderFooter> {
-    let paragraphs = footer
-        .children
-        .iter()
-        .filter_map(|child| match child {
-            docx_rs::FooterChild::Paragraph(paragraph) => Some(convert_hf_paragraph(paragraph)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if paragraphs.is_empty() {
-        return None;
+/// Convert a header/footer layout table into HeaderFooterParagraphs.
+///
+/// Word commonly uses a borderless table to lay out left/center/right
+/// content (e.g. document title | blank | "Page N") within a single
+/// header/footer line. Each table row becomes one HeaderFooterParagraph,
+/// with a flexible Spacer inserted between cells so the cell contents are
+/// pushed apart on the line, approximating the original column layout.
+fn convert_hf_table_to_paragraphs(table: &docx_rs::Table) -> Vec<HeaderFooterParagraph> {
+    let mut paragraphs = Vec::new();
+    for row_child in &table.rows {
+        let docx_rs::TableChild::TableRow(row) = row_child;
+        // Collect each cell's paragraphs from the row. A cell may contain
+        // multiple paragraphs (e.g. "Page N" on one line, "SULIT" on the
+        // next within the same footer cell); each becomes its own output
+        // line rather than being concatenated onto the same line.
+        let cell_paragraphs: Vec<Vec<&docx_rs::Paragraph>> = row
+            .cells
+            .iter()
+            .map(|cell_child| {
+                let docx_rs::TableRowChild::TableCell(cell) = cell_child;
+                cell.children
+                    .iter()
+                    .filter_map(|content| match content {
+                        docx_rs::TableCellContent::Paragraph(p) => Some(p),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let max_lines = cell_paragraphs.iter().map(Vec::len).max().unwrap_or(0);
+        for line_idx in 0..max_lines {
+            let mut elements: Vec<HFInline> = Vec::new();
+            let mut row_style: Option<ParagraphStyle> = None;
+            for (i, cell_lines) in cell_paragraphs.iter().enumerate() {
+                if i > 0 {
+                    elements.push(HFInline::Spacer);
+                }
+                if let Some(paragraph) = cell_lines.get(line_idx) {
+                    if row_style.is_none() {
+                        row_style = Some(extract_paragraph_style(&paragraph.property));
+                    }
+                    let mut field_state = HfFieldState::default();
+                    collect_hf_paragraph_children(
+                        &paragraph.children,
+                        &mut elements,
+                        &mut field_state,
+                    );
+                }
+            }
+            paragraphs.push(HeaderFooterParagraph {
+                style: row_style.unwrap_or_default(),
+                elements,
+            });
+        }
     }
-    Some(HeaderFooter { paragraphs })
+    paragraphs
 }
 
 /// Extract the header for a section, preferring the default variant and falling back to
@@ -319,74 +384,133 @@ fn convert_hf_paragraph(paragraph: &docx_rs::Paragraph) -> HeaderFooterParagraph
     let explicit_tab_overrides = extract_tab_stop_overrides(&paragraph.property.tabs);
     let style = merge_paragraph_style(&explicit_style, explicit_tab_overrides.as_deref(), None);
     let mut elements: Vec<HFInline> = Vec::new();
-
-    for child in &paragraph.children {
-        if let docx_rs::ParagraphChild::Run(run) = child {
-            let run_style = extract_run_style(&run.run_property);
-            extract_hf_run_elements(&run.children, &run_style, &mut elements);
-        }
-    }
-
+    let mut field_state = HfFieldState::default();
+    collect_hf_paragraph_children(&paragraph.children, &mut elements, &mut field_state);
     HeaderFooterParagraph { style, elements }
 }
 
+/// Tracks Word field-code state (begin/separate/end, and which field type is
+/// active) across multiple runs within the same paragraph. A single field
+/// such as `{ PAGE \* MERGEFORMAT }` is split by Word across several
+/// consecutive `<w:r>` runs (one run holds fldChar begin, the next holds
+/// instrText, another holds fldChar separate, another holds the cached
+/// display text, and a final run holds fldChar end). Field state must
+/// therefore persist across run boundaries, not reset per run.
+#[derive(Default)]
+struct HfFieldState {
+    in_field: bool,
+    past_separate: bool,
+    field_inline: Option<HFInline>,
+}
+
+/// Recursively collect HFInline elements from paragraph children, descending
+/// into StructuredDataTag wrappers (used by Word's quick-field building blocks
+/// such as the "Page Number" field, which wraps fldChar/instrText runs in an
+/// `<w:sdt>` rather than placing them as direct paragraph children).
+fn collect_hf_paragraph_children(
+    children: &[docx_rs::ParagraphChild],
+    elements: &mut Vec<HFInline>,
+    field_state: &mut HfFieldState,
+) {
+    for child in children {
+        match child {
+            docx_rs::ParagraphChild::Run(run) => {
+                let run_style = extract_run_style(&run.run_property);
+                extract_hf_run_elements(&run.children, &run_style, elements, field_state);
+            }
+            docx_rs::ParagraphChild::StructuredDataTag(sdt) => {
+                collect_hf_sdt_children(&sdt.children, elements, field_state);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Recursively collect HFInline elements from StructuredDataTag children.
+fn collect_hf_sdt_children(
+    children: &[docx_rs::StructuredDataTagChild],
+    elements: &mut Vec<HFInline>,
+    field_state: &mut HfFieldState,
+) {
+    for child in children {
+        match child {
+            docx_rs::StructuredDataTagChild::Run(run) => {
+                let run_style = extract_run_style(&run.run_property);
+                extract_hf_run_elements(&run.children, &run_style, elements, field_state);
+            }
+            docx_rs::StructuredDataTagChild::Paragraph(para) => {
+                collect_hf_paragraph_children(&para.children, elements, field_state);
+            }
+            docx_rs::StructuredDataTagChild::StructuredDataTag(nested) => {
+                collect_hf_sdt_children(&nested.children, elements, field_state);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Extract inline elements from a run's children for header/footer use.
-/// Recognizes text, tabs, and PAGE/NUMPAGES field codes.
+/// Recognizes text, tabs, and PAGE/NUMPAGES field codes. Field state is
+/// threaded in via `field_state` so that begin/separate/end markers split
+/// across multiple runs (the common case for Word's quick-field building
+/// blocks) are tracked correctly instead of resetting on every run.
 fn extract_hf_run_elements(
     children: &[docx_rs::RunChild],
     style: &TextStyle,
     elements: &mut Vec<HFInline>,
+    field_state: &mut HfFieldState,
 ) {
-    let mut in_field = false;
-    let mut field_inline: Option<HFInline> = None;
-    let mut past_separate = false;
-
     for child in children {
         match child {
             docx_rs::RunChild::FieldChar(field_char) => match field_char.field_char_type {
                 docx_rs::FieldCharType::Begin => {
-                    in_field = true;
-                    field_inline = None;
-                    past_separate = false;
+                    field_state.in_field = true;
+                    field_state.field_inline = None;
+                    field_state.past_separate = false;
                 }
                 docx_rs::FieldCharType::Separate => {
-                    past_separate = true;
+                    field_state.past_separate = true;
                 }
                 docx_rs::FieldCharType::End => {
-                    if let Some(inline) = field_inline.take() {
+                    if let Some(inline) = field_state.field_inline.take() {
                         elements.push(inline);
                     }
-                    in_field = false;
-                    past_separate = false;
+                    field_state.in_field = false;
+                    field_state.past_separate = false;
                 }
                 _ => {}
             },
             docx_rs::RunChild::InstrText(instruction) => {
-                if !in_field {
+                if !field_state.in_field {
                     continue;
                 }
-                field_inline = match instruction.as_ref() {
+                field_state.field_inline = match instruction.as_ref() {
                     docx_rs::InstrText::PAGE(_) => Some(HFInline::PageNumber),
                     docx_rs::InstrText::NUMPAGES(_) => Some(HFInline::TotalPages),
-                    _ => field_inline,
+                    _ => field_state.field_inline.take(),
                 };
             }
             docx_rs::RunChild::InstrTextString(value) => {
-                if !in_field {
+                if !field_state.in_field {
                     continue;
                 }
-                let trimmed = value.trim();
-                if trimmed.eq_ignore_ascii_case("page") {
-                    field_inline = Some(HFInline::PageNumber);
-                } else if trimmed.eq_ignore_ascii_case("numpages") {
-                    field_inline = Some(HFInline::TotalPages);
+                // Field instructions look like " PAGE   \* MERGEFORMAT " or
+                // " NUMPAGES \* MERGEFORMAT " — the field keyword is the
+                // first whitespace-separated token, followed by switches
+                // such as `\* MERGEFORMAT`. Match on that leading token
+                // rather than the whole trimmed string.
+                let keyword = value.trim().split_whitespace().next().unwrap_or("");
+                if keyword.eq_ignore_ascii_case("page") {
+                    field_state.field_inline = Some(HFInline::PageNumber);
+                } else if keyword.eq_ignore_ascii_case("numpages") {
+                    field_state.field_inline = Some(HFInline::TotalPages);
                 }
             }
             docx_rs::RunChild::Text(text) => {
-                if in_field && past_separate {
+                if field_state.in_field && field_state.past_separate {
                     continue;
                 }
-                if !in_field && !text.text.is_empty() {
+                if !field_state.in_field && !text.text.is_empty() {
                     elements.push(HFInline::Run(Run {
                         text: text.text.clone(),
                         style: style.clone(),
@@ -395,7 +519,7 @@ fn extract_hf_run_elements(
                     }));
                 }
             }
-            docx_rs::RunChild::Tab(_) if !in_field => {
+            docx_rs::RunChild::Tab(_) if !field_state.in_field => {
                 elements.push(HFInline::Run(Run {
                     text: "\t".to_string(),
                     style: style.clone(),
@@ -407,7 +531,6 @@ fn extract_hf_run_elements(
         }
     }
 }
-
 /// Extract page size and margins from DOCX section properties.
 fn extract_page_setup(section_prop: &docx_rs::SectionProperty) -> (PageSize, Margins) {
     let size = extract_page_size(&section_prop.page_size);

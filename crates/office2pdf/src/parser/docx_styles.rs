@@ -149,6 +149,9 @@ pub(super) fn merge_paragraph_style(
         indent_first_line: explicit
             .indent_first_line
             .or(style_paragraph.and_then(|style| style.indent_first_line)),
+        font_size: explicit
+            .font_size
+            .or(style_paragraph.and_then(|style| style.font_size)),
         line_spacing: explicit
             .line_spacing
             .or(style_paragraph.and_then(|style| style.line_spacing)),

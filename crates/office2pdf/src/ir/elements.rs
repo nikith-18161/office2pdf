@@ -32,6 +32,9 @@ pub enum HFInline {
     PageNumber,
     /// Total page count field.
     TotalPages,
+    /// Flexible space, used to lay out multi-cell header/footer tables
+    /// (e.g. left/center/right) on a single line.
+    Spacer,
 }
 
 /// Block-level content elements.
@@ -379,6 +382,7 @@ pub struct ImageData {
     pub format: ImageFormat,
     pub width: Option<f64>,
     pub height: Option<f64>,
+    pub alignment: Option<Alignment>,
     pub crop: Option<ImageCrop>,
     /// Optional border stroke around the image.
     pub stroke: Option<BorderSide>,

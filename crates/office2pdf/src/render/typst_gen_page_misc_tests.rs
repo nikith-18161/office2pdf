@@ -90,6 +90,110 @@ fn test_generate_flow_page_with_header_and_footer() {
 }
 
 #[test]
+fn test_generate_flow_page_reserves_hf_margin_from_paragraph_metrics() {
+    use crate::ir::{HFInline, HeaderFooter, HeaderFooterParagraph, LineSpacing};
+
+    let doc = make_doc(vec![Page::Flow(FlowPage {
+        size: PageSize::default(),
+        margins: Margins {
+            top: 72.0,
+            bottom: 72.0,
+            left: 72.0,
+            right: 72.0,
+        },
+        content: vec![make_paragraph("Body")],
+        header: Some(HeaderFooter {
+            paragraphs: vec![
+                HeaderFooterParagraph {
+                    style: ParagraphStyle::default(),
+                    elements: vec![HFInline::Run(Run {
+                        text: "Header One".to_string(),
+                        style: TextStyle {
+                            font_size: Some(10.0),
+                            ..TextStyle::default()
+                        },
+                        href: None,
+                        footnote: None,
+                    })],
+                },
+                HeaderFooterParagraph {
+                    style: ParagraphStyle {
+                        line_spacing: Some(LineSpacing::Proportional(1.5)),
+                        space_before: Some(6.0),
+                        ..ParagraphStyle::default()
+                    },
+                    elements: vec![HFInline::Run(Run {
+                        text: "Header Two".to_string(),
+                        style: TextStyle {
+                            font_size: Some(16.0),
+                            ..TextStyle::default()
+                        },
+                        href: None,
+                        footnote: None,
+                    })],
+                },
+            ],
+        }),
+        footer: Some(HeaderFooter {
+            paragraphs: vec![
+                HeaderFooterParagraph {
+                    style: ParagraphStyle {
+                        line_spacing: Some(LineSpacing::Exact(20.0)),
+                        ..ParagraphStyle::default()
+                    },
+                    elements: vec![HFInline::Run(Run {
+                        text: "Footer One".to_string(),
+                        style: TextStyle {
+                            font_size: Some(11.0),
+                            ..TextStyle::default()
+                        },
+                        href: None,
+                        footnote: None,
+                    })],
+                },
+                HeaderFooterParagraph {
+                    style: ParagraphStyle::default(),
+                    elements: vec![HFInline::Run(Run {
+                        text: "Footer Two".to_string(),
+                        style: TextStyle {
+                            font_size: Some(14.0),
+                            ..TextStyle::default()
+                        },
+                        href: None,
+                        footnote: None,
+                    })],
+                },
+            ],
+        }),
+        columns: None,
+    })]);
+
+    let output = generate_typst(&doc).unwrap();
+
+    assert!(
+        output
+            .source
+            .contains("margin: (top: 110.4pt, bottom: 108.8pt, left: 72pt, right: 72pt)"),
+        "{}",
+        output.source
+    );
+    assert!(
+        output
+            .source
+            .contains("[Header One]\\\n#v(6pt)\\\n#text(size: 16pt)[Header Two]"),
+        "{}",
+        output.source
+    );
+    assert!(
+        output
+            .source
+            .contains("[Footer One]\\\n#text(size: 14pt)[Footer Two]"),
+        "{}",
+        output.source
+    );
+}
+
+#[test]
 fn test_generate_flow_page_without_header_footer() {
     let doc = make_doc(vec![make_flow_page(vec![make_paragraph("Body")])]);
     let output = generate_typst(&doc).unwrap();

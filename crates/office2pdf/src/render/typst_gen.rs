@@ -9,11 +9,11 @@ use crate::ir::{
     Alignment, ArrowHead, Block, BorderLineStyle, BorderSide, CellBorder, CellHorizontalAlign,
     CellVerticalAlign, Chart, ChartType, Color, ColumnLayout, Document, FixedElement,
     FixedElementKind, FixedPage, FloatingImage, FloatingShape, FloatingTextBox, FlowPage,
-    GradientFill, HFInline, HeaderFooter, ImageCrop, ImageData, ImageFormat, Insets, LineSpacing,
-    List, ListKind, Margins, MathEquation, Metadata, Page, PageSize, Paragraph, ParagraphStyle,
-    Run, Shadow, Shape, ShapeKind, SheetPage, SmartArt, TabAlignment, TabLeader, TabStop, Table,
-    TableCell, TableRow, TextBoxData, TextBoxVerticalAlign, TextDirection, TextStyle,
-    VerticalTextAlign, WrapMode,
+    GradientFill, HFInline, HeaderFooter, HeaderFooterParagraph, ImageCrop, ImageData, ImageFormat,
+    Insets, LineSpacing, List, ListKind, Margins, MathEquation, Metadata, Page, PageSize,
+    Paragraph, ParagraphStyle, Run, Shadow, Shape, ShapeKind, SheetPage, SmartArt, TabAlignment,
+    TabLeader, TabStop, Table, TableCell, TableRow, TextBoxData, TextBoxVerticalAlign,
+    TextDirection, TextStyle, VerticalTextAlign, WrapMode,
 };
 
 use self::diagrams::{generate_chart, generate_smartart};
@@ -237,6 +237,16 @@ fn parse_iso8601_date(s: &str) -> Option<(i32, u8, u8, u8, u8, u8)> {
         Some((year, month, day, hour, minute, second))
     } else {
         Some((year, month, day, 0, 0, 0))
+    }
+}
+
+fn image_alignment_str(alignment: Option<Alignment>) -> Option<&'static str> {
+    match alignment {
+        Some(Alignment::Left) => Some("left"),
+        Some(Alignment::Center) => Some("center"),
+        Some(Alignment::Right) => Some("right"),
+        Some(Alignment::Justify) => Some("left"),
+        None => None,
     }
 }
 
@@ -744,20 +754,58 @@ fn write_page_setup(out: &mut String, size: &PageSize, margins: &Margins) {
     );
 }
 
-/// Write the full page setup for a FlowPage, including optional header/footer.
+/// Compute the top margin to use for page setup, widening it if needed so a
+/// multi-line header has enough room and doesn't overlap or get clipped by
+/// the body content. DOCX only stores a `header` distance (gap from the page
+/// edge to where header text starts), not the header's rendered height, so
+/// Word lets the header grow into the existing top margin as needed; we
+/// approximate that by reserving space from each paragraph's effective line
+/// height.
+fn effective_top_margin(margins: &Margins, header: Option<&HeaderFooter>) -> f64 {
+    let Some(header) = header else {
+        return margins.top;
+    };
+    let needed: f64 = margins.top
+        + header
+            .paragraphs
+            .iter()
+            .map(estimate_hf_paragraph_height_pt)
+            .sum::<f64>();
+    margins.top.max(needed)
+}
+
+/// Same reasoning as `effective_top_margin`, but for the footer/bottom
+/// margin: a multi-line footer (e.g. "Page N" followed by a "SULIT"
+/// classification line) needs enough bottom margin to avoid being clipped
+/// by the page edge.
+fn effective_bottom_margin(margins: &Margins, footer: Option<&HeaderFooter>) -> f64 {
+    let Some(footer) = footer else {
+        return margins.bottom;
+    };
+    let needed: f64 = margins.bottom
+        + footer
+            .paragraphs
+            .iter()
+            .map(estimate_hf_paragraph_height_pt)
+            .sum::<f64>();
+    margins.bottom.max(needed)
+}
+
 fn write_flow_page_setup(out: &mut String, page: &FlowPage, size: &PageSize) {
     if page.header.is_none() && page.footer.is_none() {
         write_page_setup(out, size, &page.margins);
         return;
     }
+    let top_margin = effective_top_margin(&page.margins, page.header.as_ref());
+    let bottom_margin = effective_bottom_margin(&page.margins, page.footer.as_ref());
 
     let _ = write!(
         out,
         "#set page(width: {}pt, height: {}pt, margin: (top: {}pt, bottom: {}pt, left: {}pt, right: {}pt)",
         format_f64(size.width),
         format_f64(size.height),
-        format_f64(page.margins.top),
-        format_f64(page.margins.bottom),
+        format_f64(top_margin),
+        format_f64(bottom_margin),
         format_f64(page.margins.left),
         format_f64(page.margins.right),
     );
@@ -792,13 +840,15 @@ fn write_table_page_setup(out: &mut String, page: &SheetPage, size: &PageSize) {
         return;
     }
 
+    let top_margin = effective_top_margin(&page.margins, page.header.as_ref());
+    let bottom_margin = effective_bottom_margin(&page.margins, page.footer.as_ref());
     let _ = write!(
         out,
         "#set page(width: {}pt, height: {}pt, margin: (top: {}pt, bottom: {}pt, left: {}pt, right: {}pt)",
         format_f64(size.width),
         format_f64(size.height),
-        format_f64(page.margins.top),
-        format_f64(page.margins.bottom),
+        format_f64(top_margin),
+        format_f64(bottom_margin),
         format_f64(page.margins.left),
         format_f64(page.margins.right),
     );
@@ -839,7 +889,12 @@ fn hf_needs_context(hf: &HeaderFooter) -> bool {
 fn generate_hf_content(out: &mut String, hf: &HeaderFooter) {
     for (i, para) in hf.paragraphs.iter().enumerate() {
         if i > 0 {
-            out.push_str("\\\n");
+            match para.style.space_before {
+                Some(space_before) if space_before > 0.0 => {
+                    let _ = write!(out, "\\\n#v({}pt)\\\n", format_f64(space_before));
+                }
+                _ => out.push_str("\\\n"),
+            }
         }
         // Apply paragraph alignment if set
         if let Some(align) = para.style.alignment {
@@ -861,6 +916,9 @@ fn generate_hf_content(out: &mut String, hf: &HeaderFooter) {
                 }
                 HFInline::TotalPages => {
                     out.push_str("#counter(page).final().first()");
+                }
+                HFInline::Spacer => {
+                    out.push_str("#h(1fr)");
                 }
             }
         }
@@ -945,15 +1003,22 @@ fn generate_block(out: &mut String, block: &Block, ctx: &mut GenCtx) -> Result<(
         }
         Block::Table(table) => generate_table(out, table, ctx),
         Block::Image(img) => {
+            if let Some(align_str) = image_alignment_str(img.alignment) {
+                let _ = write!(out, "#align({align_str})[");
+            }
             if let Some(ref stroke) = img.stroke {
                 out.push_str("#box(stroke: ");
                 shapes::write_image_border_stroke(out, stroke);
                 out.push_str(")[");
                 generate_image(out, img, ctx);
-                out.push_str("]\n");
+                out.push(']');
             } else {
                 generate_image(out, img, ctx);
             }
+            if image_alignment_str(img.alignment).is_some() {
+                out.push(']');
+            }
+            out.push('\n');
             Ok(())
         }
         Block::FloatingImage(fi) => {
@@ -1305,6 +1370,26 @@ fn estimate_single_line_height_pt(paragraph: &Paragraph) -> f64 {
     let default_line_height_pt: f64 = max_font_size_pt * 1.2;
 
     match paragraph.style.line_spacing {
+        Some(LineSpacing::Exact(points)) => default_line_height_pt.max(points),
+        Some(LineSpacing::Proportional(factor)) => {
+            default_line_height_pt.max(max_font_size_pt * factor)
+        }
+        None => default_line_height_pt,
+    }
+}
+
+fn estimate_hf_paragraph_height_pt(para: &HeaderFooterParagraph) -> f64 {
+    let max_font_size_pt: f64 = para
+        .elements
+        .iter()
+        .filter_map(|element| match element {
+            HFInline::Run(run) => run.style.font_size,
+            _ => None,
+        })
+        .fold(12.0, f64::max);
+    let default_line_height_pt: f64 = max_font_size_pt * 1.2;
+
+    match para.style.line_spacing {
         Some(LineSpacing::Exact(points)) => default_line_height_pt.max(points),
         Some(LineSpacing::Proportional(factor)) => {
             default_line_height_pt.max(max_font_size_pt * factor)

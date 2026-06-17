@@ -325,6 +325,17 @@ fn test_font_size_extracted() {
 }
 
 #[test]
+fn test_paragraph_mark_font_size_extracted_for_empty_paragraph() {
+    let data = build_docx_bytes(vec![docx_rs::Paragraph::new().size(36)]);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let para = first_paragraph(&doc);
+
+    assert!(para.runs.is_empty());
+    assert_eq!(para.style.font_size, Some(18.0));
+}
+
+#[test]
 fn test_letter_spacing_extracted() {
     let data = build_docx_bytes(vec![
         docx_rs::Paragraph::new().add_run(

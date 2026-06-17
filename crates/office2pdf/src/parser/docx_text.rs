@@ -16,6 +16,7 @@ pub(super) fn extract_paragraph_style(prop: &docx_rs::ParagraphProperty) -> Para
 
     let (indent_left, indent_right, indent_first_line) = extract_indent(&prop.indent);
     let (line_spacing, space_before, space_after) = extract_line_spacing(&prop.line_spacing);
+    let font_size = extract_run_style(&prop.run_property).font_size;
     let tab_stops = extract_tab_stops(&prop.tabs);
 
     ParagraphStyle {
@@ -23,6 +24,7 @@ pub(super) fn extract_paragraph_style(prop: &docx_rs::ParagraphProperty) -> Para
         indent_left,
         indent_right,
         indent_first_line,
+        font_size,
         line_spacing,
         space_before,
         space_after,

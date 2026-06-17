@@ -20,6 +20,7 @@ pub struct ParagraphStyle {
     pub indent_left: Option<f64>,
     pub indent_right: Option<f64>,
     pub indent_first_line: Option<f64>,
+    pub font_size: Option<f64>,
     pub line_spacing: Option<LineSpacing>,
     pub space_before: Option<f64>,
     pub space_after: Option<f64>,
@@ -179,6 +180,9 @@ impl ParagraphStyle {
         }
         if other.indent_first_line.is_some() {
             self.indent_first_line = other.indent_first_line;
+        }
+        if other.font_size.is_some() {
+            self.font_size = other.font_size;
         }
         if other.line_spacing.is_some() {
             self.line_spacing = other.line_spacing;

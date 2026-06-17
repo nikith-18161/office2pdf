@@ -260,6 +260,50 @@ fn test_docx_no_images_produces_no_image_blocks() {
 }
 
 #[test]
+fn test_docx_inline_image_in_centered_paragraph_keeps_alignment() {
+    let document_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+    <w:body>
+        <w:p>
+            <w:pPr>
+                <w:jc w:val="center"/>
+            </w:pPr>
+            <w:r>
+                <w:drawing>
+                    <wp:inline>
+                        <wp:extent cx="952500" cy="476250"/>
+                        <a:graphic>
+                            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                                <pic:pic>
+                                    <pic:blipFill>
+                                        <a:blip r:embed="rIdImage1"/>
+                                    </pic:blipFill>
+                                    <pic:spPr/>
+                                </pic:pic>
+                            </a:graphicData>
+                        </a:graphic>
+                    </wp:inline>
+                </w:drawing>
+            </w:r>
+        </w:p>
+        <w:sectPr/>
+    </w:body>
+</w:document>"#;
+
+    let data = build_docx_with_custom_image_document(document_xml);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+
+    let images = find_images(&doc);
+    assert_eq!(images.len(), 1, "Expected one inline image");
+    assert_eq!(images[0].alignment, Some(Alignment::Center));
+}
+
+#[test]
 fn test_docx_image_with_custom_emu_size() {
     let bmp_data = make_test_bmp();
     let pic = docx_rs::Pic::new(&bmp_data).size(2_540_000, 1_270_000);

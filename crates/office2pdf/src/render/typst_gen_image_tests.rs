@@ -30,6 +30,7 @@ fn make_image(format: ImageFormat, width: Option<f64>, height: Option<f64>) -> B
         format,
         width,
         height,
+        alignment: None,
         crop: None,
         stroke: None,
     })
@@ -57,6 +58,7 @@ fn test_image_crop_preprocesses_raster_asset() {
         format: ImageFormat::Png,
         width: Some(20.0),
         height: Some(20.0),
+        alignment: None,
         crop: Some(ImageCrop {
             left: 0.5,
             top: 0.0,
@@ -230,6 +232,7 @@ fn test_image_with_border_renders_box_stroke() {
         format: ImageFormat::Png,
         width: Some(127.0),
         height: Some(227.0),
+        alignment: None,
         crop: None,
         stroke: Some(BorderSide {
             width: 6.0,
@@ -265,6 +268,7 @@ fn test_fixed_image_with_border_uses_rect_overlay() {
                 format: ImageFormat::Png,
                 width: Some(96.9),
                 height: Some(226.2),
+                alignment: None,
                 crop: None,
                 stroke: Some(BorderSide {
                     width: 5.87,
@@ -310,6 +314,32 @@ fn test_image_without_border_no_box() {
     assert!(
         !output.source.contains("#box(stroke:"),
         "Should NOT have #box wrapper when no stroke: {}",
+        output.source
+    );
+}
+
+#[test]
+fn test_image_with_center_alignment_uses_align_wrapper() {
+    let doc = make_doc(vec![make_flow_page(vec![Block::Image(ImageData {
+        data: MINIMAL_PNG.to_vec(),
+        format: ImageFormat::Png,
+        width: Some(100.0),
+        height: Some(80.0),
+        crop: None,
+        stroke: None,
+        alignment: Some(Alignment::Center),
+    })])]);
+    let output = generate_typst(&doc).unwrap();
+    assert!(
+        output.source.contains("#align(center)["),
+        "Expected align wrapper in: {}",
+        output.source
+    );
+    assert!(
+        output
+            .source
+            .contains("#image(\"img-0.png\", width: 100pt, height: 80pt, fit: \"stretch\")"),
+        "Expected image call in: {}",
         output.source
     );
 }
