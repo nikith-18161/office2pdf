@@ -284,10 +284,7 @@ pub(crate) fn generate_typst_with_options_and_font_context(
         generate_document_metadata(&mut out, &doc.metadata);
 
         let mut ctx = GenCtx::new();
-        for (index, page) in doc.pages.iter().enumerate() {
-            if index > 0 {
-                out.push_str("\n#pagebreak()\n");
-            }
+        for page in &doc.pages {
             match page {
                 Page::Flow(flow) => generate_flow_page(&mut out, flow, &mut ctx, options)?,
                 Page::Fixed(fixed) => generate_fixed_page(&mut out, fixed, &mut ctx, options)?,

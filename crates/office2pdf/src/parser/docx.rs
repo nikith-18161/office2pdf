@@ -42,9 +42,9 @@ use self::styles::{
 };
 use self::tables::convert_table;
 use self::text::{
-    extract_doc_default_text_style, extract_paragraph_style, extract_run_style,
-    extract_run_style_id, extract_run_text, extract_run_text_skip_column_breaks,
-    extract_tab_stop_overrides, is_column_break, parse_hex_color, resolve_hyperlink_url,
+    extract_paragraph_style, extract_run_style, extract_run_style_id, extract_run_text,
+    extract_run_text_skip_column_breaks, extract_tab_stop_overrides, is_column_break,
+    is_page_break, parse_hex_color, resolve_hyperlink_url,
 };
 #[cfg(test)]
 use self::text::{extract_tab_stops, resolve_highlight_color};
@@ -163,6 +163,64 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
     }
 }
 
+fn page_setup_differs(
+    previous_page: &crate::ir::FlowPage,
+    current_page: &crate::ir::FlowPage,
+) -> bool {
+    fn pt_differs(left: f64, right: f64) -> bool {
+        (left - right).abs() > 0.01
+    }
+
+    pt_differs(previous_page.size.width, current_page.size.width)
+        || pt_differs(previous_page.size.height, current_page.size.height)
+        || pt_differs(previous_page.margins.top, current_page.margins.top)
+        || pt_differs(previous_page.margins.bottom, current_page.margins.bottom)
+        || pt_differs(previous_page.margins.left, current_page.margins.left)
+        || pt_differs(previous_page.margins.right, current_page.margins.right)
+}
+
+fn push_flow_page_for_section(
+    pages: &mut Vec<Page>,
+    section_prop: &docx_rs::SectionProperty,
+    elements: Vec<TaggedElement>,
+    numberings: &NumberingMap,
+    header_footer_assets: &HeaderFooterAssets,
+    column_layout: Option<ColumnLayout>,
+    warnings: &mut Vec<ConvertWarning>,
+) {
+    let flow_page = build_flow_page_from_section(
+        section_prop,
+        elements,
+        numberings,
+        header_footer_assets,
+        column_layout,
+        warnings,
+    );
+
+    if matches!(
+        section_prop.section_type,
+        Some(docx_rs::SectionType::Continuous)
+    ) && let Some(Page::Flow(previous_page)) = pages.last_mut()
+    {
+        if page_setup_differs(previous_page, &flow_page) {
+            warnings.push(ConvertWarning::FallbackUsed {
+                format: "DOCX".to_string(),
+                from: "continuous section page setup change".to_string(),
+                to: "previous page size/margins".to_string(),
+            });
+        }
+
+        // Our IR applies header/footer and column layout per FlowPage. When a
+        // continuous section is merged into an existing page, keep the prior
+        // page-level settings; Word would apply a new header/footer on the next
+        // physical page anyway, so this is the lower-risk approximation.
+        previous_page.content.extend(flow_page.content);
+        return;
+    }
+
+    pages.push(Page::Flow(flow_page));
+}
+
 impl Parser for DocxParser {
     fn parse(
         &self,
@@ -258,14 +316,15 @@ impl Parser for DocxParser {
                     Some(layout) => layout.clone(),
                     None => extract_column_layout_from_section_property(section_prop),
                 };
-                pages.push(Page::Flow(build_flow_page_from_section(
+                push_flow_page_for_section(
+                    &mut pages,
                     section_prop,
                     std::mem::take(&mut elements),
                     &numberings,
                     &header_footer_assets,
                     column_layout,
                     &mut warnings,
-                )));
+                );
                 section_layout_index += 1;
             }
         }
@@ -274,14 +333,15 @@ impl Parser for DocxParser {
             Some(layout) => layout.clone(),
             None => extract_column_layout_from_section_property(&docx.document.section_property),
         };
-        pages.push(Page::Flow(build_flow_page_from_section(
+        push_flow_page_for_section(
+            &mut pages,
             &docx.document.section_property,
             elements,
             &numberings,
             &header_footer_assets,
             final_column_layout,
             &mut warnings,
-        )));
+        );
 
         Ok((
             Document {
@@ -416,14 +476,21 @@ fn build_text_run(
 }
 
 /// Intermediate results from scanning a run's children for media, text boxes,
-/// and structural elements (column breaks).
+/// and structural elements (column/page breaks).
 struct RunChildrenMedia {
     has_column_break: bool,
+    has_page_break: bool,
     text_box_blocks: Vec<Block>,
 }
 
-/// Scan a run's children for drawings, VML shapes, and column breaks.
-/// Extracted images are pushed to `inline_images`; text boxes and column break
+#[derive(Clone, Copy)]
+enum StructuralBreak {
+    Column,
+    Page,
+}
+
+/// Scan a run's children for drawings, VML shapes, and structural breaks.
+/// Extracted images are pushed to `inline_images`; text boxes and break
 /// detection are returned in `RunChildrenMedia`.
 fn extract_run_children_media(
     run: &docx_rs::Run,
@@ -434,6 +501,7 @@ fn extract_run_children_media(
     inline_images: &mut Vec<Block>,
 ) -> RunChildrenMedia {
     let mut has_column_break: bool = false;
+    let mut has_page_break: bool = false;
     let mut text_box_blocks: Vec<Block> = Vec::new();
 
     for run_child in &run.children {
@@ -474,39 +542,158 @@ fn extract_run_children_media(
         {
             has_column_break = true;
         }
+        if let docx_rs::RunChild::Break(br) = run_child
+            && is_page_break(br)
+        {
+            has_page_break = true;
+        }
     }
 
     RunChildrenMedia {
         has_column_break,
+        has_page_break,
         text_box_blocks,
     }
 }
 
 /// Process hyperlink children, extracting text runs with the resolved URL.
 fn process_hyperlink_runs(
+    para: &docx_rs::Paragraph,
+    out: &mut Vec<Block>,
     hyperlink: &docx_rs::Hyperlink,
     hyperlinks: &HyperlinkMap,
     resolved_style: Option<&ResolvedStyle>,
     style_map: &StyleMap,
+    is_rtl: bool,
     ctx: &DocxConversionContext,
+    inline_images: &mut Vec<Block>,
     runs: &mut Vec<Run>,
+    emitted_paragraph: &mut bool,
 ) {
     let href: Option<String> = resolve_hyperlink_url(hyperlink, hyperlinks);
     for hchild in &hyperlink.children {
         if let docx_rs::ParagraphChild::Run(run) = hchild {
             let hl_small_caps: bool = ctx.small_caps.next_is_small_caps();
-            let text: String = extract_run_text(run);
-            if let Some(ir_run) = build_text_run(
-                text,
-                &run.run_property,
-                hl_small_caps,
-                resolved_style,
-                style_map,
-                href.clone(),
-            ) {
-                runs.push(ir_run);
+            let has_structural_break = run.children.iter().any(|child| {
+                matches!(child, docx_rs::RunChild::Break(br) if is_column_break(br) || is_page_break(br))
+            });
+
+            if has_structural_break {
+                process_run_text_with_structural_breaks(
+                    run,
+                    para,
+                    out,
+                    resolved_style,
+                    style_map,
+                    is_rtl,
+                    hl_small_caps,
+                    href.clone(),
+                    inline_images,
+                    runs,
+                    emitted_paragraph,
+                );
+            } else {
+                let text: String = extract_run_text_skip_column_breaks(run);
+                if let Some(ir_run) = build_text_run(
+                    text,
+                    &run.run_property,
+                    hl_small_caps,
+                    resolved_style,
+                    style_map,
+                    href.clone(),
+                ) {
+                    runs.push(ir_run);
+                }
             }
         }
+    }
+}
+
+fn flush_pending_runs_before_structural_break(
+    out: &mut Vec<Block>,
+    para: &docx_rs::Paragraph,
+    resolved_style: Option<&ResolvedStyle>,
+    is_rtl: bool,
+    inline_images: &mut Vec<Block>,
+    runs: &mut Vec<Run>,
+    emitted_paragraph: &mut bool,
+) {
+    if !runs.is_empty() {
+        out.append(inline_images);
+        push_paragraph_from_runs(out, para, resolved_style, is_rtl, runs);
+        *emitted_paragraph = true;
+    }
+}
+
+fn push_structural_break_block(out: &mut Vec<Block>, structural_break: StructuralBreak) {
+    match structural_break {
+        StructuralBreak::Column => out.push(Block::ColumnBreak),
+        StructuralBreak::Page => out.push(Block::PageBreak),
+    }
+}
+
+fn process_run_text_with_structural_breaks(
+    run: &docx_rs::Run,
+    para: &docx_rs::Paragraph,
+    out: &mut Vec<Block>,
+    resolved_style: Option<&ResolvedStyle>,
+    style_map: &StyleMap,
+    is_rtl: bool,
+    is_small_caps: bool,
+    href: Option<String>,
+    inline_images: &mut Vec<Block>,
+    runs: &mut Vec<Run>,
+    emitted_paragraph: &mut bool,
+) {
+    let mut segment_text: String = String::new();
+
+    for child in &run.children {
+        match child {
+            docx_rs::RunChild::Text(text) => segment_text.push_str(&text.text),
+            docx_rs::RunChild::Tab(_) => segment_text.push('\t'),
+            docx_rs::RunChild::Break(br) if is_column_break(br) || is_page_break(br) => {
+                if let Some(ir_run) = build_text_run(
+                    std::mem::take(&mut segment_text),
+                    &run.run_property,
+                    is_small_caps,
+                    resolved_style,
+                    style_map,
+                    href.clone(),
+                ) {
+                    runs.push(ir_run);
+                }
+
+                flush_pending_runs_before_structural_break(
+                    out,
+                    para,
+                    resolved_style,
+                    is_rtl,
+                    inline_images,
+                    runs,
+                    emitted_paragraph,
+                );
+
+                let structural_break = if is_column_break(br) {
+                    StructuralBreak::Column
+                } else {
+                    StructuralBreak::Page
+                };
+                push_structural_break_block(out, structural_break);
+            }
+            docx_rs::RunChild::Break(_) => segment_text.push('\n'),
+            _ => {}
+        }
+    }
+
+    if let Some(ir_run) = build_text_run(
+        segment_text,
+        &run.run_property,
+        is_small_caps,
+        resolved_style,
+        style_map,
+        href,
+    ) {
+        runs.push(ir_run);
     }
 }
 
@@ -586,29 +773,22 @@ fn convert_paragraph_blocks(
                     out.extend(media.text_box_blocks);
                 }
 
-                if media.has_column_break {
-                    // Flush current runs as a paragraph before the column break
-                    if !runs.is_empty() {
-                        out.append(&mut inline_images);
-                        push_paragraph_from_runs(out, para, resolved_style, is_rtl, &mut runs);
-                        emitted_paragraph = true;
-                    }
-                    out.push(Block::ColumnBreak);
-
-                    // Still extract any text from this run (after the break)
-                    let text: String = extract_run_text_skip_column_breaks(run);
-                    if let Some(ir_run) = build_text_run(
-                        text,
-                        &run.run_property,
-                        is_small_caps,
+                if media.has_column_break || media.has_page_break {
+                    process_run_text_with_structural_breaks(
+                        run,
+                        para,
+                        out,
                         resolved_style,
                         style_map,
+                        is_rtl,
+                        is_small_caps,
                         None,
-                    ) {
-                        runs.push(ir_run);
-                    }
+                        &mut inline_images,
+                        &mut runs,
+                        &mut emitted_paragraph,
+                    );
                 } else {
-                    let text: String = extract_run_text(run);
+                    let text: String = extract_run_text_skip_column_breaks(run);
                     if let Some(ir_run) = build_text_run(
                         text,
                         &run.run_property,
@@ -623,12 +803,17 @@ fn convert_paragraph_blocks(
             }
             docx_rs::ParagraphChild::Hyperlink(hyperlink) => {
                 process_hyperlink_runs(
+                    para,
+                    out,
                     hyperlink,
                     hyperlinks,
                     resolved_style,
                     style_map,
+                    is_rtl,
                     ctx,
+                    &mut inline_images,
                     &mut runs,
+                    &mut emitted_paragraph,
                 );
             }
             _ => {}
@@ -639,6 +824,14 @@ fn convert_paragraph_blocks(
         if let Block::Image(image) = block {
             image.alignment = image_alignment;
         }
+    }
+
+    if para.property.section_property.is_some()
+        && runs.is_empty()
+        && inline_images.is_empty()
+        && !emitted_media_blocks
+    {
+        return;
     }
 
     // Emit image blocks before the paragraph (inline images are block-level in our IR)

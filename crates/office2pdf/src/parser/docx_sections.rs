@@ -149,11 +149,11 @@ pub(super) fn build_flow_page_from_section(
 
     if matches!(
         section_prop.section_type,
-        Some(docx_rs::SectionType::Continuous | docx_rs::SectionType::NextColumn)
+        Some(docx_rs::SectionType::NextColumn)
     ) {
         warnings.push(ConvertWarning::FallbackUsed {
             format: "DOCX".to_string(),
-            from: "continuous section break".to_string(),
+            from: "next-column section break".to_string(),
             to: "page-level section split".to_string(),
         });
     }
@@ -538,6 +538,10 @@ fn extract_page_setup(section_prop: &docx_rs::SectionProperty) -> (PageSize, Mar
     (size, margins)
 }
 
+fn round_page_dimension_pt(value: f64) -> f64 {
+    (value * 2.0).round() / 2.0
+}
+
 /// Extract page size from docx-rs PageSize (which has private fields).
 /// Uses serde serialization to access the private `w`, `h`, and `orient` fields.
 /// Values in DOCX are in twips (1/20 of a point).
@@ -555,8 +559,8 @@ pub(super) fn extract_page_size(page_size: &docx_rs::PageSize) -> PageSize {
             .unwrap_or(0.0);
         let orientation = json.get("orient").and_then(|value| value.as_str());
         if width_twips > 0.0 && height_twips > 0.0 {
-            let mut width = twips_to_pt(width_twips);
-            let mut height = twips_to_pt(height_twips);
+            let mut width = round_page_dimension_pt(twips_to_pt(width_twips));
+            let mut height = round_page_dimension_pt(twips_to_pt(height_twips));
             if orientation == Some("landscape") && width < height {
                 std::mem::swap(&mut width, &mut height);
             }

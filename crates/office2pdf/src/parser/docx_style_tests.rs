@@ -281,3 +281,73 @@ fn test_runs_inherit_document_default_font() {
     assert_eq!(para.runs[1].style.color, Some(Color::new(17, 85, 204)));
     assert_eq!(para.runs[1].style.underline, Some(true));
 }
+
+#[test]
+fn test_paragraphs_inherit_document_default_paragraph_spacing() {
+    let styles = docx_rs::Styles::new().default_line_spacing(
+        docx_rs::LineSpacing::new()
+            .line_rule(docx_rs::LineSpacingType::Auto)
+            .line(360)
+            .after(60),
+    );
+
+    let paragraph = docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Body text"));
+    let data = build_docx_bytes_with_stylesheet(vec![paragraph], styles);
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let para = first_paragraph(&doc);
+
+    match para.style.line_spacing {
+        Some(LineSpacing::Proportional(factor)) => {
+            assert!(
+                (factor - 1.5).abs() < 0.01,
+                "Expected 1.5 spacing from docDefaults, got {factor}"
+            );
+        }
+        other => panic!("Expected Proportional line spacing from docDefaults, got {other:?}"),
+    }
+    assert_eq!(para.style.space_after, Some(3.0));
+    assert_eq!(para.style.space_before, None);
+}
+
+#[test]
+fn test_paragraph_style_spacing_overrides_document_defaults() {
+    let styles = docx_rs::Styles::new()
+        .default_line_spacing(
+            docx_rs::LineSpacing::new()
+                .line_rule(docx_rs::LineSpacingType::Auto)
+                .line(360)
+                .after(60),
+        )
+        .add_style(
+            docx_rs::Style::new("BodyStyle", docx_rs::StyleType::Paragraph)
+                .name("Body Style")
+                .line_spacing(
+                    docx_rs::LineSpacing::new()
+                        .line_rule(docx_rs::LineSpacingType::Exact)
+                        .line(240)
+                        .after(120),
+                ),
+        );
+
+    let paragraph = docx_rs::Paragraph::new()
+        .style("BodyStyle")
+        .add_run(docx_rs::Run::new().add_text("Styled body text"));
+    let data = build_docx_bytes_with_stylesheet(vec![paragraph], styles);
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let para = first_paragraph(&doc);
+
+    match para.style.line_spacing {
+        Some(LineSpacing::Exact(points)) => {
+            assert!(
+                (points - 12.0).abs() < 0.01,
+                "Expected 12pt style spacing, got {points}"
+            );
+        }
+        other => panic!("Expected Exact line spacing from paragraph style, got {other:?}"),
+    }
+    assert_eq!(para.style.space_after, Some(6.0));
+}

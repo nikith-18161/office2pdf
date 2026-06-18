@@ -148,6 +148,56 @@ fn test_parse_docx_section_specific_column_layouts() {
 }
 
 #[test]
+fn test_sectpr_only_paragraph_is_not_emitted_as_empty_content() {
+    let document_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+    <w:body>
+        <w:p><w:r><w:t>Section one content</w:t></w:r></w:p>
+        <w:p>
+            <w:pPr>
+                <w:rPr>
+                    <w:color w:val="000000"/>
+                </w:rPr>
+                <w:sectPr>
+                    <w:pgSz w:w="12240" w:h="15840"/>
+                </w:sectPr>
+            </w:pPr>
+        </w:p>
+        <w:p><w:r><w:t>Section two content</w:t></w:r></w:p>
+        <w:sectPr>
+            <w:pgSz w:w="12240" w:h="15840"/>
+        </w:sectPr>
+    </w:body>
+</w:document>"#;
+
+    let data = build_docx_with_columns(document_xml);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+
+    assert_eq!(doc.pages.len(), 2, "Expected one FlowPage per section");
+
+    let first = match &doc.pages[0] {
+        Page::Flow(flow) => flow,
+        _ => panic!("Expected FlowPage"),
+    };
+    let second = match &doc.pages[1] {
+        Page::Flow(flow) => flow,
+        _ => panic!("Expected FlowPage"),
+    };
+
+    assert_eq!(first.content.len(), 1);
+    assert!(matches!(
+        &first.content[0],
+        Block::Paragraph(paragraph) if paragraph.runs.iter().any(|run| run.text == "Section one content")
+    ));
+    assert_eq!(second.content.len(), 1);
+    assert!(matches!(
+        &second.content[0],
+        Block::Paragraph(paragraph) if paragraph.runs.iter().any(|run| run.text == "Section two content")
+    ));
+}
+
+#[test]
 fn test_parse_docx_three_column_equal() {
     let document_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -247,6 +297,106 @@ fn test_parse_docx_column_break() {
             .map(std::mem::discriminant)
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn test_parse_docx_run_level_page_break() {
+    let data = build_docx_bytes(vec![
+        docx_rs::Paragraph::new()
+            .add_run(docx_rs::Run::new().add_text("Before"))
+            .add_run(docx_rs::Run::new().add_break(docx_rs::BreakType::Page))
+            .add_run(docx_rs::Run::new().add_text("After")),
+    ]);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+
+    let flow = match &doc.pages[0] {
+        Page::Flow(f) => f,
+        _ => panic!("Expected FlowPage"),
+    };
+
+    assert_eq!(
+        flow.content.len(),
+        3,
+        "Expected paragraph, page break, paragraph"
+    );
+    assert!(matches!(
+        &flow.content[0],
+        Block::Paragraph(paragraph)
+            if paragraph.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "Before"
+    ));
+    assert!(matches!(&flow.content[1], Block::PageBreak));
+    assert!(matches!(
+        &flow.content[2],
+        Block::Paragraph(paragraph)
+            if paragraph.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "After"
+    ));
+}
+
+#[test]
+fn test_parse_docx_inline_page_break_within_single_run() {
+    let data = build_docx_bytes(vec![
+        docx_rs::Paragraph::new().add_run(
+            docx_rs::Run::new()
+                .add_text("Before")
+                .add_break(docx_rs::BreakType::Page)
+                .add_text("After"),
+        ),
+    ]);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+
+    let flow = match &doc.pages[0] {
+        Page::Flow(f) => f,
+        _ => panic!("Expected FlowPage"),
+    };
+
+    assert_eq!(
+        flow.content.len(),
+        3,
+        "Expected paragraph, page break, paragraph"
+    );
+    assert!(matches!(
+        &flow.content[0],
+        Block::Paragraph(paragraph)
+            if paragraph.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "Before"
+    ));
+    assert!(matches!(&flow.content[1], Block::PageBreak));
+    assert!(matches!(
+        &flow.content[2],
+        Block::Paragraph(paragraph)
+            if paragraph.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "After"
+    ));
+}
+
+#[test]
+fn test_parse_docx_soft_line_break_remains_text_newline() {
+    let data = build_docx_bytes(vec![
+        docx_rs::Paragraph::new().add_run(
+            docx_rs::Run::new()
+                .add_text("Before")
+                .add_break(docx_rs::BreakType::TextWrapping)
+                .add_text("After"),
+        ),
+    ]);
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+
+    let flow = match &doc.pages[0] {
+        Page::Flow(f) => f,
+        _ => panic!("Expected FlowPage"),
+    };
+
+    assert_eq!(
+        flow.content.len(),
+        1,
+        "Soft line break should stay within the paragraph"
+    );
+    assert!(matches!(
+        &flow.content[0],
+        Block::Paragraph(paragraph)
+            if paragraph.runs.iter().map(|run| run.text.as_str()).collect::<String>() == "Before\nAfter"
+    ));
 }
 
 #[test]

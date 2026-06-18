@@ -6,13 +6,11 @@ use crate::parser::units::{half_points_to_pt, twips_to_pt};
 use crate::parser::xml_util;
 
 pub(super) fn extract_paragraph_style(prop: &docx_rs::ParagraphProperty) -> ParagraphStyle {
-    let alignment = prop.alignment.as_ref().and_then(|j| match j.val.as_str() {
-        "center" => Some(Alignment::Center),
-        "right" | "end" => Some(Alignment::Right),
-        "left" | "start" => Some(Alignment::Left),
-        "both" | "justified" => Some(Alignment::Justify),
-        _ => None,
-    });
+    let alignment = extract_alignment(
+        prop.alignment
+            .as_ref()
+            .map(|alignment| alignment.val.as_str()),
+    );
 
     let (indent_left, indent_right, indent_first_line) = extract_indent(&prop.indent);
     let (line_spacing, space_before, space_after) = extract_line_spacing(&prop.line_spacing);
@@ -34,6 +32,49 @@ pub(super) fn extract_paragraph_style(prop: &docx_rs::ParagraphProperty) -> Para
     }
 }
 
+fn extract_paragraph_style_from_json(prop: &serde_json::Value) -> ParagraphStyle {
+    let alignment = extract_alignment(prop.get("alignment").and_then(serde_json::Value::as_str));
+    let (indent_left, indent_right, indent_first_line) =
+        extract_indent_from_json(prop.get("indent"));
+    let line_spacing_value = prop
+        .get("lineSpacing")
+        .and_then(|value| serde_json::from_value::<docx_rs::LineSpacing>(value.clone()).ok());
+    let (line_spacing, space_before, space_after) = extract_line_spacing(&line_spacing_value);
+    let font_size = prop
+        .get("runProperty")
+        .map(extract_run_style_from_json)
+        .unwrap_or_default()
+        .font_size;
+    let tab_stops = prop
+        .get("tabs")
+        .and_then(|value| serde_json::from_value::<Vec<docx_rs::Tab>>(value.clone()).ok())
+        .and_then(|tabs| extract_tab_stops(&tabs));
+
+    ParagraphStyle {
+        alignment,
+        indent_left,
+        indent_right,
+        indent_first_line,
+        font_size,
+        line_spacing,
+        space_before,
+        space_after,
+        heading_level: None,
+        direction: None,
+        tab_stops,
+    }
+}
+
+fn extract_alignment(value: Option<&str>) -> Option<Alignment> {
+    match value {
+        Some("center") => Some(Alignment::Center),
+        Some("right") | Some("end") => Some(Alignment::Right),
+        Some("left") | Some("start") => Some(Alignment::Left),
+        Some("both") | Some("justified") => Some(Alignment::Justify),
+        _ => None,
+    }
+}
+
 fn extract_indent(indent: &Option<docx_rs::Indent>) -> (Option<f64>, Option<f64>, Option<f64>) {
     let Some(indent) = indent else {
         return (None, None, None);
@@ -44,6 +85,33 @@ fn extract_indent(indent: &Option<docx_rs::Indent>) -> (Option<f64>, Option<f64>
     let first_line = indent.special_indent.map(|si| match si {
         docx_rs::SpecialIndentType::FirstLine(v) => twips_to_pt(v),
         docx_rs::SpecialIndentType::Hanging(v) => -twips_to_pt(v),
+    });
+
+    (left, right, first_line)
+}
+
+fn extract_indent_from_json(
+    indent: Option<&serde_json::Value>,
+) -> (Option<f64>, Option<f64>, Option<f64>) {
+    let Some(indent) = indent else {
+        return (None, None, None);
+    };
+
+    let left = indent
+        .get("start")
+        .and_then(serde_json::Value::as_f64)
+        .map(twips_to_pt);
+    let right = indent
+        .get("end")
+        .and_then(serde_json::Value::as_f64)
+        .map(twips_to_pt);
+    let first_line = indent.get("specialIndent").and_then(|value| {
+        let amount = value.get("val").and_then(serde_json::Value::as_f64)?;
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("firstLine") => Some(twips_to_pt(amount)),
+            Some("hanging") => Some(-twips_to_pt(amount)),
+            _ => None,
+        }
     });
 
     (left, right, first_line)
@@ -200,6 +268,20 @@ pub(super) fn extract_doc_default_text_style(styles: &docx_rs::Styles) -> TextSt
     extract_run_style_from_json(run_property)
 }
 
+pub(super) fn extract_doc_default_paragraph_style(styles: &docx_rs::Styles) -> ParagraphStyle {
+    let Ok(json) = serde_json::to_value(&styles.doc_defaults) else {
+        return ParagraphStyle::default();
+    };
+    let Some(paragraph_property) = json
+        .get("paragraphPropertyDefault")
+        .and_then(|value| value.get("paragraphProperty"))
+    else {
+        return ParagraphStyle::default();
+    };
+
+    extract_paragraph_style_from_json(paragraph_property)
+}
+
 pub(super) fn resolve_highlight_color(name: &str) -> Option<Color> {
     match name {
         "yellow" => Some(Color::new(255, 255, 0)),
@@ -251,13 +333,23 @@ pub(super) fn is_column_break(br: &docx_rs::Break) -> bool {
         .unwrap_or(false)
 }
 
+pub(super) fn is_page_break(br: &docx_rs::Break) -> bool {
+    serde_json::to_value(br)
+        .ok()
+        .and_then(|v| {
+            v.get("breakType")
+                .and_then(|bt| bt.as_str().map(|s| s == "page"))
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn extract_run_text_skip_column_breaks(run: &docx_rs::Run) -> String {
     let mut text = String::new();
     for child in &run.children {
         match child {
             docx_rs::RunChild::Text(t) => text.push_str(&t.text),
             docx_rs::RunChild::Tab(_) => text.push('\t'),
-            docx_rs::RunChild::Break(br) if !is_column_break(br) => {
+            docx_rs::RunChild::Break(br) if !is_column_break(br) && !is_page_break(br) => {
                 text.push('\n');
             }
             _ => {}

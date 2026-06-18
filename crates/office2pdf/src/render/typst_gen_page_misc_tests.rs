@@ -202,7 +202,7 @@ fn test_generate_flow_page_without_header_footer() {
 }
 
 #[test]
-fn test_generate_typst_inserts_pagebreak_between_flow_pages() {
+fn test_generate_typst_relies_on_page_setup_instead_of_emitting_pagebreaks() {
     let first = Page::Flow(FlowPage {
         size: PageSize::default(),
         margins: Margins::default(),
@@ -221,9 +221,11 @@ fn test_generate_typst_inserts_pagebreak_between_flow_pages() {
     });
 
     let output = generate_typst(&make_doc(vec![first, second])).unwrap();
-    let pagebreak_count = output.source.matches("#pagebreak()").count();
+    let pagebreak_count = output.source.matches("#pagebreak").count();
 
-    assert_eq!(pagebreak_count, 1);
+    assert_eq!(pagebreak_count, 0);
+    assert!(output.source.contains("First section"));
+    assert!(output.source.contains("Second section"));
 }
 
 #[test]

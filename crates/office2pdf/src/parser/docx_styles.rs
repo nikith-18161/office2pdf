@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::ir::{ParagraphStyle, TabStop, TextStyle};
 
-use super::{
-    extract_doc_default_text_style, extract_paragraph_style, extract_run_style,
-    extract_tab_stop_overrides,
+use super::text::{
+    extract_doc_default_paragraph_style, extract_doc_default_text_style, extract_paragraph_style,
+    extract_run_style, extract_tab_stop_overrides,
 };
 
 /// Resolved style formatting extracted from a document style definition.
@@ -36,12 +36,13 @@ use crate::defaults::HEADING_FONT_SIZES;
 pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
     let mut map = StyleMap::new();
     let default_text: TextStyle = extract_doc_default_text_style(styles);
+    let default_paragraph: ParagraphStyle = extract_doc_default_paragraph_style(styles);
 
     map.insert(
         DOC_DEFAULT_STYLE_ID.to_string(),
         ResolvedStyle {
             text: default_text,
-            paragraph: ParagraphStyle::default(),
+            paragraph: default_paragraph,
             paragraph_tab_overrides: None,
             heading_level: None,
         },
@@ -54,9 +55,13 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
                     &extract_run_style(&style.run_property),
                     map.get(DOC_DEFAULT_STYLE_ID),
                 );
-                let paragraph = extract_paragraph_style(&style.paragraph_property);
                 let paragraph_tab_overrides =
                     extract_tab_stop_overrides(&style.paragraph_property.tabs);
+                let paragraph = merge_paragraph_style(
+                    &extract_paragraph_style(&style.paragraph_property),
+                    paragraph_tab_overrides.as_deref(),
+                    map.get(DOC_DEFAULT_STYLE_ID),
+                );
                 let heading_level = style
                     .paragraph_property
                     .outline_lvl

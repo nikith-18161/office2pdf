@@ -266,6 +266,177 @@ fn test_parse_docx_multiple_sections_with_distinct_page_setup_and_headers() {
 }
 
 #[test]
+fn test_continuous_section_merges_into_previous_flow_page() {
+    let mut pages = vec![Page::Flow(FlowPage {
+        size: PageSize::default(),
+        margins: Margins::default(),
+        content: vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle::default(),
+            runs: vec![Run {
+                text: "Existing page".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })],
+        header: Some(crate::ir::HeaderFooter {
+            paragraphs: vec![crate::ir::HeaderFooterParagraph {
+                style: ParagraphStyle::default(),
+                elements: vec![crate::ir::HFInline::Run(Run {
+                    text: "Previous Header".to_string(),
+                    style: TextStyle::default(),
+                    href: None,
+                    footnote: None,
+                })],
+            }],
+        }),
+        footer: None,
+        columns: None,
+    })];
+    let mut section_prop = docx_rs::SectionProperty::new().header(
+        docx_rs::Header::new().add_paragraph(
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("New Header")),
+        ),
+        "rIdContinuousHeader",
+    );
+    section_prop.section_type = Some(docx_rs::SectionType::Continuous);
+    let mut warnings = Vec::new();
+
+    push_flow_page_for_section(
+        &mut pages,
+        &section_prop,
+        vec![TaggedElement::Plain(vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle::default(),
+            runs: vec![Run {
+                text: "Merged section".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })])],
+        &NumberingMap::new(),
+        &HeaderFooterAssets::default(),
+        None,
+        &mut warnings,
+    );
+
+    assert_eq!(
+        pages.len(),
+        1,
+        "continuous section should not add a new page"
+    );
+
+    let page = match &pages[0] {
+        Page::Flow(page) => page,
+        _ => panic!("Expected FlowPage"),
+    };
+    let paragraph_texts: Vec<String> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => {
+                Some(paragraph.runs.iter().map(|run| run.text.as_str()).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paragraph_texts, vec!["Existing page", "Merged section"]);
+
+    let header_text = page
+        .header
+        .as_ref()
+        .and_then(|header| {
+            header
+                .paragraphs
+                .iter()
+                .flat_map(|paragraph| paragraph.elements.iter())
+                .find_map(|element| match element {
+                    crate::ir::HFInline::Run(run) => Some(run.text.as_str()),
+                    _ => None,
+                })
+        })
+        .unwrap_or("");
+    assert_eq!(header_text, "Previous Header");
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            crate::error::ConvertWarning::FallbackUsed { from, to, .. }
+                if from == "continuous section break" && to == "page-level section split"
+        )),
+        "continuous section merge should not emit the old page-split fallback"
+    );
+}
+
+#[test]
+fn test_continuous_section_page_setup_change_keeps_previous_page_setup() {
+    let previous_margins = Margins::default();
+    let mut pages = vec![Page::Flow(FlowPage {
+        size: PageSize::default(),
+        margins: previous_margins,
+        content: vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle::default(),
+            runs: vec![Run {
+                text: "Existing page".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })],
+        header: None,
+        footer: None,
+        columns: None,
+    })];
+    let mut section_prop = docx_rs::SectionProperty::new()
+        .page_size(docx_rs::PageSize::new().size(15840, 12240))
+        .page_margin(
+            docx_rs::PageMargin::new()
+                .top(720)
+                .bottom(720)
+                .left(720)
+                .right(720),
+        );
+    section_prop.section_type = Some(docx_rs::SectionType::Continuous);
+    let mut warnings = Vec::new();
+
+    push_flow_page_for_section(
+        &mut pages,
+        &section_prop,
+        vec![TaggedElement::Plain(vec![Block::Paragraph(Paragraph {
+            style: ParagraphStyle::default(),
+            runs: vec![Run {
+                text: "Different setup".to_string(),
+                style: TextStyle::default(),
+                href: None,
+                footnote: None,
+            }],
+        })])],
+        &NumberingMap::new(),
+        &HeaderFooterAssets::default(),
+        None,
+        &mut warnings,
+    );
+
+    assert_eq!(
+        pages.len(),
+        1,
+        "continuous section should merge into the prior page"
+    );
+
+    let page = match &pages[0] {
+        Page::Flow(page) => page,
+        _ => panic!("Expected FlowPage"),
+    };
+    assert!((page.size.width - PageSize::default().width).abs() < 0.01);
+    assert!((page.size.height - PageSize::default().height).abs() < 0.01);
+    assert!((page.margins.top - previous_margins.top).abs() < 0.01);
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        crate::error::ConvertWarning::FallbackUsed { from, to, .. }
+            if from == "continuous section page setup change" && to == "previous page size/margins"
+    )));
+}
+
+#[test]
 fn test_parse_docx_with_header_and_footer() {
     let header = docx_rs::Header::new().add_paragraph(
         docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Header Text")),
@@ -456,4 +627,18 @@ fn test_extract_page_size_no_orient_keeps_dimensions() {
         result.width,
         result.height
     );
+}
+
+#[test]
+fn test_extract_page_size_rounds_sub_twip_section_noise_to_half_points() {
+    let first_page_size = docx_rs::PageSize::new().width(11906).height(16838);
+    let second_page_size = docx_rs::PageSize::new().width(11907).height(16839);
+
+    let first = extract_page_size(&first_page_size);
+    let second = extract_page_size(&second_page_size);
+
+    assert_eq!(first.width, 595.5);
+    assert_eq!(first.height, 842.0);
+    assert_eq!(first.width, second.width);
+    assert_eq!(first.height, second.height);
 }
