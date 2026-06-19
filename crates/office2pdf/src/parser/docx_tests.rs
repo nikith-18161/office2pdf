@@ -592,6 +592,127 @@ fn test_merges_adjacent_lists_with_different_num_ids() {
 }
 
 #[test]
+fn test_numbered_list_continues_across_plain_paragraphs() {
+    let abstract_num = docx_rs::AbstractNumbering::new(0).add_level(docx_rs::Level::new(
+        0,
+        docx_rs::Start::new(1),
+        docx_rs::NumberFormat::new("lowerLetter"),
+        docx_rs::LevelText::new("%1."),
+        docx_rs::LevelJc::new("left"),
+    ));
+
+    let data = build_docx_with_numbering(
+        vec![abstract_num],
+        vec![docx_rs::Numbering::new(1, 0)],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Beta"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("For example, the default is 8080.")),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Gamma"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("For example, the default is 8005.")),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Delta"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lists.len(),
+        3,
+        "each interrupted item stays in document order"
+    );
+    assert_eq!(lists[0].items[0].start_at, Some(1));
+    assert_eq!(lists[1].items[0].start_at, Some(2));
+    assert_eq!(lists[2].items[0].start_at, Some(3));
+}
+
+#[test]
+fn test_deeper_level_restarts_after_parent_reentry_across_plain_paragraphs() {
+    let abstract_num = docx_rs::AbstractNumbering::new(0)
+        .add_level(docx_rs::Level::new(
+            0,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("decimal"),
+            docx_rs::LevelText::new("%1."),
+            docx_rs::LevelJc::new("left"),
+        ))
+        .add_level(docx_rs::Level::new(
+            1,
+            docx_rs::Start::new(1),
+            docx_rs::NumberFormat::new("lowerLetter"),
+            docx_rs::LevelText::new("%2."),
+            docx_rs::LevelJc::new("left"),
+        ));
+
+    let data = build_docx_with_numbering(
+        vec![abstract_num],
+        vec![docx_rs::Numbering::new(1, 0)],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Parent 1"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Child a"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(1)),
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Explanation")),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Parent 2"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new().add_run(docx_rs::Run::new().add_text("Another explanation")),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Child restart"))
+                .numbering(docx_rs::NumberingId::new(1), docx_rs::IndentLevel::new(1)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(lists.len(), 3);
+    assert_eq!(lists[0].items.len(), 2);
+    assert_eq!(lists[0].items[0].start_at, Some(1));
+    assert_eq!(lists[0].items[1].start_at, Some(1));
+    assert_eq!(lists[1].items[0].start_at, Some(2));
+    assert_eq!(
+        lists[2].items[0].start_at,
+        Some(1),
+        "re-entering level 1 after the parent level resumed must restart the nested counter"
+    );
+}
+
+#[test]
 fn test_preserves_empty_paragraph_after_drawing_only_anchor() {
     let document_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"

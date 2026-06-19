@@ -504,3 +504,134 @@ fn test_generate_list_uses_first_item_level_marker_when_list_starts_nested() {
             .contains("marker: [#text(font: \"맑은 고딕\", size: 14pt, fill: rgb(0, 0, 0))[-]]")
     );
 }
+
+#[test]
+fn test_generate_native_list_maps_paragraph_spacing_to_wrapper_and_item_spacing() {
+    use crate::ir::List;
+
+    let item_style = ParagraphStyle {
+        font_size: Some(12.0),
+        line_spacing: Some(LineSpacing::Proportional(1.5)),
+        space_before: Some(4.0),
+        space_after: Some(5.1),
+        ..ParagraphStyle::default()
+    };
+    let list = List {
+        kind: ListKind::Ordered,
+        items: vec![
+            ListItem {
+                content: vec![Paragraph {
+                    style: item_style.clone(),
+                    runs: vec![Run {
+                        text: "First item".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: Some(1),
+            },
+            ListItem {
+                content: vec![Paragraph {
+                    style: item_style,
+                    runs: vec![Run {
+                        text: "Second item".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+        ],
+        level_styles: BTreeMap::from([(
+            0,
+            ListLevelStyle {
+                kind: ListKind::Ordered,
+                numbering_pattern: Some("a.".to_string()),
+                full_numbering: false,
+                marker_text: None,
+                marker_style: None,
+            },
+        )]),
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::List(list)])]);
+    let output = generate_typst(&doc).unwrap();
+
+    assert!(
+        output
+            .source
+            .contains("#block(width: 100%, above: 4pt, below: 5.1pt)[\n#enum(")
+    );
+    assert!(
+        output
+            .source
+            .contains("numbering: \"a.\", start: 1, spacing: 11.1pt,")
+    );
+    assert!(
+        !output.source.contains("#stack(dir: ttb"),
+        "Flow-page native list rendering should not fall back to the fixed-text stack path: {}",
+        output.source
+    );
+}
+
+#[test]
+fn test_generate_native_list_omits_zero_inter_item_spacing_parameter() {
+    use crate::ir::List;
+
+    let list = List {
+        kind: ListKind::Unordered,
+        items: vec![
+            ListItem {
+                content: vec![Paragraph {
+                    style: ParagraphStyle {
+                        font_size: Some(12.0),
+                        space_after: Some(0.0),
+                        ..ParagraphStyle::default()
+                    },
+                    runs: vec![Run {
+                        text: "Alpha".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+            ListItem {
+                content: vec![Paragraph {
+                    style: ParagraphStyle {
+                        font_size: Some(12.0),
+                        space_after: Some(0.0),
+                        ..ParagraphStyle::default()
+                    },
+                    runs: vec![Run {
+                        text: "Beta".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+        ],
+        level_styles: BTreeMap::new(),
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::List(list)])]);
+    let output = generate_typst(&doc).unwrap();
+
+    assert!(
+        output
+            .source
+            .contains("#block(width: 100%, below: 14.4pt)[\n#list(")
+    );
+    assert!(
+        !output.source.contains("#list(spacing:"),
+        "Zero inter-item spacing should preserve Typst defaults for list spacing: {}",
+        output.source
+    );
+}

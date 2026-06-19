@@ -44,6 +44,7 @@ fn write_list_open(
     prefix: &str,
     style: &EffectiveListStyle<'_>,
     start_at: Option<u32>,
+    spacing_pt: Option<f64>,
 ) {
     let (func, _) = list_funcs(style.kind);
     let _ = write!(out, "{prefix}{func}(");
@@ -69,6 +70,10 @@ fn write_list_open(
         out.push_str("marker: [");
         write_unordered_list_marker_content(out, style);
         out.push_str("], ");
+    }
+
+    if let Some(spacing_pt) = spacing_pt.filter(|spacing_pt| spacing_pt.abs() > 0.0001) {
+        let _ = write!(out, "spacing: {}pt, ", format_f64(spacing_pt));
     }
 
     out.push('\n');
@@ -120,12 +125,89 @@ fn list_root_level(list: &List) -> u32 {
 
 pub(super) fn generate_list(out: &mut String, list: &List) -> Result<(), ConvertError> {
     let root_level: u32 = list_root_level(list);
-    let style = list_style_for_level(list, root_level);
-    let start_at = list.items.first().and_then(|item| item.start_at);
-    write_list_open(out, "#", &style, start_at);
-    generate_list_items(out, list, &list.items, root_level)?;
-    out.push_str(")\n");
+    generate_list_segment(out, list, &list.items, root_level, "#")?;
+    out.push('\n');
     Ok(())
+}
+
+fn generate_list_segment(
+    out: &mut String,
+    list: &List,
+    items: &[crate::ir::ListItem],
+    base_level: u32,
+    prefix: &str,
+) -> Result<(), ConvertError> {
+    let style: EffectiveListStyle<'_> = list_style_for_level(list, base_level);
+    let representative_style: Option<&ParagraphStyle> = list_representative_style(items);
+    let start_at: Option<u32> = items.first().and_then(|item| item.start_at);
+    let spacing_pt: Option<f64> = representative_style
+        .and_then(|paragraph_style| native_list_item_spacing_pt(paragraph_style, items));
+    let has_block_wrapper: bool = representative_style.is_some_and(needs_block_wrapper);
+
+    if has_block_wrapper {
+        let _ = write!(out, "{prefix}block(");
+        write_block_params(out, representative_style.expect("checked is_some above"));
+        out.push_str(")[\n");
+        write_list_open(out, "#", &style, start_at, spacing_pt);
+    } else {
+        write_list_open(out, prefix, &style, start_at, spacing_pt);
+    }
+
+    generate_list_items(out, list, items, base_level)?;
+    out.push(')');
+    if has_block_wrapper {
+        out.push_str("\n]");
+    }
+    Ok(())
+}
+
+fn list_representative_style(items: &[crate::ir::ListItem]) -> Option<&ParagraphStyle> {
+    items
+        .iter()
+        .find_map(|item| item.content.first().map(|paragraph| &paragraph.style))
+}
+
+// Word stores paragraph leading separately from paragraph spacing. For native
+// Typst lists we map `space_before`/`space_after` onto the list's surrounding
+// block, while `spacing:` only receives the between-item gap: the paragraph's
+// `space_after` plus any extra leading introduced by non-single line spacing.
+// This keeps within-line leading distinct from the separation between items.
+fn native_list_item_spacing_pt(
+    style: &ParagraphStyle,
+    items: &[crate::ir::ListItem],
+) -> Option<f64> {
+    let spacing_after_pt: f64 = style.space_after.unwrap_or(0.0);
+    let line_gap_pt: f64 = native_list_line_spacing_extra_pt(style, items).unwrap_or(0.0);
+    let spacing_pt: f64 = spacing_after_pt + line_gap_pt;
+    (spacing_pt.abs() > 0.0001).then_some(spacing_pt)
+}
+
+fn native_list_line_spacing_extra_pt(
+    style: &ParagraphStyle,
+    items: &[crate::ir::ListItem],
+) -> Option<f64> {
+    let font_size_pt: f64 = native_list_font_size_pt(style, items);
+    match style.line_spacing {
+        Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
+            Some((font_size_pt * (factor - 1.0)).max(0.0))
+        }
+        Some(LineSpacing::Exact(points)) => Some((points - font_size_pt).max(0.0)),
+        _ => None,
+    }
+}
+
+fn native_list_font_size_pt(style: &ParagraphStyle, items: &[crate::ir::ListItem]) -> f64 {
+    style
+        .font_size
+        .or_else(|| {
+            items
+                .iter()
+                .flat_map(|item| item.content.iter())
+                .flat_map(|paragraph| paragraph.runs.iter())
+                .filter_map(|run| run.style.font_size)
+                .max_by(f64::total_cmp)
+        })
+        .unwrap_or(12.0)
 }
 
 pub(super) fn can_render_fixed_text_list_inline(list: &List) -> bool {
@@ -863,11 +945,13 @@ fn generate_list_items(
             }
 
             if nested_end > nested_start {
-                let nested_style = list_style_for_level(list, base_level + 1);
-                let nested_start_at = items[nested_start].start_at;
-                write_list_open(out, " #", &nested_style, nested_start_at);
-                generate_list_items(out, list, &items[nested_start..nested_end], base_level + 1)?;
-                out.push(')');
+                generate_list_segment(
+                    out,
+                    list,
+                    &items[nested_start..nested_end],
+                    base_level + 1,
+                    " #",
+                )?;
                 i = nested_end;
             } else {
                 i += 1;

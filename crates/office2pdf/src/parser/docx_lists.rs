@@ -228,7 +228,13 @@ struct NumberedItem {
     item: ListItem,
 }
 
-fn finalize_list(numbered_items: Vec<NumberedItem>, numberings: &NumberingMap) -> List {
+type ListContinuationMap = HashMap<(usize, u32), u32>;
+
+fn finalize_list(
+    numbered_items: Vec<NumberedItem>,
+    numberings: &NumberingMap,
+    continued_numbers: &mut ListContinuationMap,
+) -> List {
     // Build merged per-level styles from every numId present. The first item
     // encountered at a given level establishes that level's style — adjacent
     // list paragraphs authored with different numIds (common in pandoc/
@@ -251,24 +257,64 @@ fn finalize_list(numbered_items: Vec<NumberedItem>, numberings: &NumberingMap) -
         .or_else(|| level_styles.values().next().map(|style| style.kind))
         .unwrap_or(ListKind::Unordered);
 
-    // Ordered levels restart at their configured `start` only when first seen or
-    // re-entered at a deeper level; otherwise the counter continues across the
-    // merged items so "1." then "2." is preserved instead of "1." then "1.".
+    // Word scopes list continuation to the numbering instance (`numId`), so an
+    // intervening body paragraph should not reset ordered numbering when the
+    // next list fragment resumes the same `(numId, ilvl)`. We keep separate
+    // `Block::List` fragments in IR order and resume numbering by carrying the
+    // next value for each `(numId, level)` across flushes.
+    //
+    // This parser only sees the resolved level start value, not every semantic
+    // restart signal Word may encode. We therefore approximate explicit restarts
+    // by using the resolved `start` the first time a `(numId, level)` appears,
+    // and again whenever a deeper level is re-entered after its parent level.
     let mut items: Vec<ListItem> = Vec::with_capacity(numbered_items.len());
+    let mut active_ordered_levels: HashMap<u32, u32> = HashMap::new();
     let mut previous_level: Option<u32> = None;
+    let mut seen_num_ids: Vec<usize> = Vec::new();
     for NumberedItem { num_id, mut item } in numbered_items {
+        if !seen_num_ids.contains(&num_id) {
+            seen_num_ids.push(num_id);
+        }
+
         let resolved_level = numberings
             .get(&num_id)
             .and_then(|numbering| numbering.levels.get(&item.level));
-        item.start_at = match (resolved_level, previous_level) {
-            (Some(level), None) if level.style.kind == ListKind::Ordered => Some(level.start),
-            (Some(level), Some(previous_level))
-                if level.style.kind == ListKind::Ordered && item.level > previous_level =>
-            {
-                Some(level.start)
+
+        item.start_at = if let Some(level) = resolved_level {
+            if level.style.kind == ListKind::Ordered {
+                let has_active_run: bool = active_ordered_levels.contains_key(&item.level);
+                let next_number: u32 =
+                    if let Some(next_number) = active_ordered_levels.get(&item.level) {
+                        *next_number
+                    } else if previous_level.is_some_and(|level_before| item.level > level_before) {
+                        level.start
+                    } else {
+                        continued_numbers
+                            .get(&(num_id, item.level))
+                            .copied()
+                            .unwrap_or(level.start)
+                    };
+
+                active_ordered_levels.insert(item.level, next_number + 1);
+                continued_numbers.insert((num_id, item.level), next_number + 1);
+
+                if has_active_run {
+                    None
+                } else {
+                    Some(next_number)
+                }
+            } else {
+                None
             }
-            _ => None,
+        } else {
+            None
         };
+
+        active_ordered_levels.retain(|level, _| *level <= item.level);
+        continued_numbers.retain(|(stored_num_id, stored_level), _| {
+            !seen_num_ids.contains(stored_num_id) || *stored_level <= item.level
+        });
+
         previous_level = Some(item.level);
         items.push(item);
     }
@@ -290,6 +336,7 @@ pub(super) fn group_into_lists(
 ) -> Vec<Block> {
     let mut result: Vec<Block> = Vec::new();
     let mut current_list: Vec<NumberedItem> = Vec::new();
+    let mut continued_numbers: ListContinuationMap = HashMap::new();
 
     for element in elements {
         match element {
@@ -308,6 +355,7 @@ pub(super) fn group_into_lists(
                     result.push(Block::List(finalize_list(
                         std::mem::take(&mut current_list),
                         numberings,
+                        &mut continued_numbers,
                     )));
                 }
                 result.extend(blocks);
@@ -316,7 +364,11 @@ pub(super) fn group_into_lists(
     }
 
     if !current_list.is_empty() {
-        result.push(Block::List(finalize_list(current_list, numberings)));
+        result.push(Block::List(finalize_list(
+            current_list,
+            numberings,
+            &mut continued_numbers,
+        )));
     }
 
     result
