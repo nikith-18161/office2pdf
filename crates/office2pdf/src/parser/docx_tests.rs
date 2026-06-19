@@ -592,6 +592,163 @@ fn test_merges_adjacent_lists_with_different_num_ids() {
 }
 
 #[test]
+fn test_bullet_list_followed_by_numbered_list_splits() {
+    // A bullet list immediately followed by a numbered list must NOT merge
+    // into a single Block::List. The merged list's overall kind is set from
+    // the first item's resolved style, which would force every subsequent
+    // item into the wrong marker style. This is the Alfresco manual bug:
+    // the prerequisites bullets absorbed step 1 of the install procedure,
+    // and the numbered sequence then started at "2." instead of "1.".
+    //
+    // abstractNumIds and numIds use values >= 100 because docx_rs's builder
+    // auto-inserts a default abstractNumId=1 / numId=1 (a 9-level decimal).
+    // Lower user ids collide with it on round-trip and the parser's
+    // first-wins resolution can return the default abstract instead of the
+    // user-defined one, masking the kind difference this test depends on.
+    let bullet_abstract = docx_rs::AbstractNumbering::new(100).add_level(docx_rs::Level::new(
+        0,
+        docx_rs::Start::new(1),
+        docx_rs::NumberFormat::new("bullet"),
+        docx_rs::LevelText::new("\u{2022}"),
+        docx_rs::LevelJc::new("left"),
+    ));
+    let numbered_abstract = docx_rs::AbstractNumbering::new(101).add_level(docx_rs::Level::new(
+        0,
+        docx_rs::Start::new(1),
+        docx_rs::NumberFormat::new("decimal"),
+        docx_rs::LevelText::new("%1."),
+        docx_rs::LevelJc::new("left"),
+    ));
+
+    let data = build_docx_with_numbering(
+        vec![bullet_abstract, numbered_abstract],
+        vec![
+            docx_rs::Numbering::new(100, 100),
+            docx_rs::Numbering::new(101, 101),
+        ],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Bullet one"))
+                .numbering(docx_rs::NumberingId::new(100), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Bullet two"))
+                .numbering(docx_rs::NumberingId::new(100), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Numbered one"))
+                .numbering(docx_rs::NumberingId::new(101), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Numbered two"))
+                .numbering(docx_rs::NumberingId::new(101), docx_rs::IndentLevel::new(0)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lists.len(),
+        2,
+        "bullet and numbered lists must not merge into one Block::List"
+    );
+    assert_eq!(lists[0].kind, ListKind::Unordered);
+    assert_eq!(lists[0].items.len(), 2);
+    assert_eq!(lists[1].kind, ListKind::Ordered);
+    assert_eq!(lists[1].items.len(), 2);
+    assert_eq!(
+        lists[1].items[0].start_at,
+        Some(1),
+        "the numbered list starts at 1, not continued from the bullet list"
+    );
+    assert_eq!(
+        lists[1].items[1].start_at, None,
+        "the second numbered item continues counting (-> 2.)"
+    );
+}
+
+#[test]
+fn test_numbered_list_followed_by_bullet_list_splits() {
+    // Mirror of the bullet-then-numbered case: a numbered list immediately
+    // followed by a bullet list must also remain as two separate
+    // Block::List entries, each with its own resolved kind. See
+    // `test_bullet_list_followed_by_numbered_list_splits` for why
+    // abstractNumIds and numIds use values >= 100.
+    let numbered_abstract = docx_rs::AbstractNumbering::new(100).add_level(docx_rs::Level::new(
+        0,
+        docx_rs::Start::new(1),
+        docx_rs::NumberFormat::new("decimal"),
+        docx_rs::LevelText::new("%1."),
+        docx_rs::LevelJc::new("left"),
+    ));
+    let bullet_abstract = docx_rs::AbstractNumbering::new(101).add_level(docx_rs::Level::new(
+        0,
+        docx_rs::Start::new(1),
+        docx_rs::NumberFormat::new("bullet"),
+        docx_rs::LevelText::new("\u{2022}"),
+        docx_rs::LevelJc::new("left"),
+    ));
+
+    let data = build_docx_with_numbering(
+        vec![numbered_abstract, bullet_abstract],
+        vec![
+            docx_rs::Numbering::new(100, 100),
+            docx_rs::Numbering::new(101, 101),
+        ],
+        vec![
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Numbered one"))
+                .numbering(docx_rs::NumberingId::new(100), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Numbered two"))
+                .numbering(docx_rs::NumberingId::new(100), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Bullet one"))
+                .numbering(docx_rs::NumberingId::new(101), docx_rs::IndentLevel::new(0)),
+            docx_rs::Paragraph::new()
+                .add_run(docx_rs::Run::new().add_text("Bullet two"))
+                .numbering(docx_rs::NumberingId::new(101), docx_rs::IndentLevel::new(0)),
+        ],
+    );
+
+    let parser = DocxParser;
+    let (doc, _warnings) = parser.parse(&data, &ConvertOptions::default()).unwrap();
+    let page = match &doc.pages[0] {
+        Page::Flow(p) => p,
+        _ => panic!("Expected FlowPage"),
+    };
+    let lists: Vec<&List> = page
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            Block::List(list) => Some(list),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lists.len(),
+        2,
+        "numbered and bullet lists must not merge into one Block::List"
+    );
+    assert_eq!(lists[0].kind, ListKind::Ordered);
+    assert_eq!(lists[0].items.len(), 2);
+    assert_eq!(lists[0].items[0].start_at, Some(1));
+    assert_eq!(lists[1].kind, ListKind::Unordered);
+    assert_eq!(lists[1].items.len(), 2);
+}
+
+#[test]
 fn test_numbered_list_continues_across_plain_paragraphs() {
     let abstract_num = docx_rs::AbstractNumbering::new(0).add_level(docx_rs::Level::new(
         0,

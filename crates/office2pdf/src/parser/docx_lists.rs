@@ -341,6 +341,39 @@ pub(super) fn group_into_lists(
     for element in elements {
         match element {
             TaggedElement::ListParagraph { info, paragraph } => {
+                // Issue #176 keeps numbering coherent when authoring tools
+                // split one conceptual list across multiple numIds, so a numId
+                // change alone does not flush. However, when the new item's
+                // resolved kind (ordered vs unordered) at its level differs
+                // from the kind already established for that level by an
+                // earlier item, merging would force the entire Block::List
+                // into the first-established kind (mis-rendering one half),
+                // so we flush first.
+                if !current_list.is_empty() {
+                    let new_kind = numberings
+                        .get(&info.num_id)
+                        .and_then(|numbering| numbering.levels.get(&info.level))
+                        .map(|lvl| lvl.style.kind);
+                    let existing_same_level_kind = current_list
+                        .iter()
+                        .filter(|ni| ni.item.level == info.level)
+                        .find_map(|ni| {
+                            numberings
+                                .get(&ni.num_id)
+                                .and_then(|numbering| numbering.levels.get(&ni.item.level))
+                                .map(|lvl| lvl.style.kind)
+                        });
+                    if let (Some(new_kind), Some(existing_kind)) =
+                        (new_kind, existing_same_level_kind)
+                        && new_kind != existing_kind
+                    {
+                        result.push(Block::List(finalize_list(
+                            std::mem::take(&mut current_list),
+                            numberings,
+                            &mut continued_numbers,
+                        )));
+                    }
+                }
                 current_list.push(NumberedItem {
                     num_id: info.num_id,
                     item: ListItem {
