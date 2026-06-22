@@ -399,8 +399,10 @@ fn test_generate_positive_space_after_is_preserved() {
     let result = generate_typst(&doc).unwrap().source;
 
     assert!(
-        result.contains("below: 6pt"),
-        "Expected meaningful positive space_after to remain unchanged in: {result}"
+        result.contains("below: 8.7pt"),
+        "Expected positive space_after (6pt) to combine with the 1.15x line \
+         spacing extras (18pt * 0.15 = 2.7pt) for a total below: 8.7pt, got: \
+         {result}"
     );
 }
 

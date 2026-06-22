@@ -563,7 +563,7 @@ fn test_generate_native_list_maps_paragraph_spacing_to_wrapper_and_item_spacing(
     assert!(
         output
             .source
-            .contains("#block(width: 100%, above: 4pt, below: 5.1pt)[\n#enum(")
+            .contains("#block(width: 100%, above: 4pt, below: 11.1pt)[\n#enum(")
     );
     assert!(
         output

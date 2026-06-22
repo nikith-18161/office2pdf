@@ -94,9 +94,38 @@ fn zero_space_after_block_buffer_pt(style: &ParagraphStyle) -> f64 {
     (unclamped_buffer_pt * 100.0).round() / 100.0
 }
 
+fn paragraph_line_spacing_extra_pt(style: &ParagraphStyle) -> f64 {
+    // The portion of a paragraph's authored line height that exceeds single
+    // spacing. For 1.5x line spacing this is roughly half a line; for single
+    // spacing it is zero. Mirrors `native_list_line_spacing_extra_pt` in
+    // typst_gen_lists.rs so within-list and between-block spacing share one
+    // semantic model.
+    let font_size_pt: f64 = style.font_size.unwrap_or(12.0);
+    match style.line_spacing {
+        Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
+            (font_size_pt * (factor - 1.0)).max(0.0)
+        }
+        Some(LineSpacing::Exact(points)) => (points - font_size_pt).max(0.0),
+        _ => 0.0,
+    }
+}
+
 fn effective_block_space_after_pt(style: &ParagraphStyle) -> f64 {
+    // Word's <w:spacing w:after> is the *extra* gap layered on top of the
+    // paragraph's natural line height: a "3pt after" paragraph with 1.5x line
+    // spacing sits ~half-a-line + 3pt below its predecessor, not 3pt total.
+    // Typst's #block(below:) is the *total* gap, so we add the line
+    // spacing's extra contribution on top of the explicit space_after to
+    // faithfully render Word's intent. This mirrors the formula already
+    // used in native_list_item_spacing_pt for within-list inter-item
+    // spacing, so block boundaries and list-item boundaries follow one rule.
+    //
+    // Negative space_after (an explicit overlap hint) is passed through
+    // unchanged; the empty-paragraph buffer continues to apply when
+    // space_after is unset or zero.
+    let line_extras = paragraph_line_spacing_extra_pt(style);
     match style.space_after {
-        Some(space_after) if space_after > 0.0 => space_after,
+        Some(space_after) if space_after > 0.0 => space_after + line_extras,
         Some(space_after) if space_after < 0.0 => space_after,
         Some(_) | None => zero_space_after_block_buffer_pt(style),
     }
