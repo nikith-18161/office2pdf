@@ -108,6 +108,8 @@ pub(super) fn needs_block_wrapper(style: &ParagraphStyle) -> bool {
         || style.line_spacing.is_some()
         || matches!(style.alignment, Some(Alignment::Justify))
         || matches!(style.direction, Some(TextDirection::Rtl))
+        || style.indent_left.is_some_and(|i| i.abs() > 0.0001)
+        || style.indent_right.is_some_and(|i| i.abs() > 0.0001)
 }
 
 pub(super) fn write_block_params(out: &mut String, style: &ParagraphStyle) {
@@ -121,6 +123,26 @@ pub(super) fn write_block_params(out: &mut String, style: &ParagraphStyle) {
     if style.space_after.is_some() || style.line_spacing.is_some() {
         let below = effective_block_space_after_pt(style);
         write_param(out, &mut first, &format!("below: {}pt", format_f64(below)));
+    }
+
+    // Word's <w:ind w:left> / <w:ind w:right> on non-list paragraphs becomes
+    // block inset so the paragraph indents from the left margin (and stops
+    // short of the right) instead of flowing flush to the block edge. List
+    // items get their indentation from the enclosing #enum/#list and don't
+    // pass through this code path, so there's no double-indent risk.
+    let mut inset_parts: Vec<String> = Vec::new();
+    if let Some(indent_left) = style.indent_left.filter(|i| i.abs() > 0.0001) {
+        inset_parts.push(format!("left: {}pt", format_f64(indent_left)));
+    }
+    if let Some(indent_right) = style.indent_right.filter(|i| i.abs() > 0.0001) {
+        inset_parts.push(format!("right: {}pt", format_f64(indent_right)));
+    }
+    if !inset_parts.is_empty() {
+        write_param(
+            out,
+            &mut first,
+            &format!("inset: ({})", inset_parts.join(", ")),
+        );
     }
 }
 

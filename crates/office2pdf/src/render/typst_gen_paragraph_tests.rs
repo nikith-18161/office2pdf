@@ -405,6 +405,85 @@ fn test_generate_positive_space_after_is_preserved() {
 }
 
 #[test]
+fn test_generate_paragraph_with_left_indent_emits_block_inset() {
+    // Non-list paragraphs that carry <w:ind w:left> in their pPr must be
+    // rendered with a corresponding block inset so they indent from the
+    // surrounding flow instead of sitting flush at the page margin. Without
+    // this, continuation paragraphs in Word lists (e.g. "For example, the
+    // default is 8080." that follows a sub-item) collapse against the left
+    // margin and the visual hierarchy with the parent list item is lost.
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            indent_left: Some(57.5),
+            space_after: Some(3.0),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Indented continuation".to_string(),
+            style: TextStyle::default(),
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+    assert!(
+        result.contains("inset: (left: 57.5pt)"),
+        "Expected block inset for a paragraph with indent_left=57.5, got: {result}"
+    );
+}
+
+#[test]
+fn test_generate_paragraph_with_left_and_right_indent_emits_combined_inset() {
+    // Both <w:ind w:left> and <w:ind w:right> are collapsed into a single
+    // block inset clause. The order is left then right to match the
+    // ordering Word stores in pPr (left comes first in the OOXML schema).
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            indent_left: Some(57.5),
+            indent_right: Some(0.75),
+            space_after: Some(3.0),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Indented both sides".to_string(),
+            style: TextStyle::default(),
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+    assert!(
+        result.contains("inset: (left: 57.5pt, right: 0.75pt)"),
+        "Expected combined left/right block inset, got: {result}"
+    );
+}
+
+#[test]
+fn test_generate_paragraph_without_indent_omits_inset() {
+    // Paragraphs that don't carry any <w:ind> must not gain an inset clause
+    // (which would silently shift them away from the left margin). This
+    // guards against accidentally emitting `inset:` for indent values that
+    // round down to zero or are unset.
+    let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
+        style: ParagraphStyle {
+            space_after: Some(6.0),
+            ..ParagraphStyle::default()
+        },
+        runs: vec![Run {
+            text: "Plain".to_string(),
+            style: TextStyle::default(),
+            href: None,
+            footnote: None,
+        }],
+    })])]);
+    let result = generate_typst(&doc).unwrap().source;
+    assert!(
+        !result.contains("inset:"),
+        "Expected no inset clause for paragraph without indent, got: {result}"
+    );
+}
+
+#[test]
 fn test_generate_aligned_block_paragraph_uses_full_width() {
     let doc = make_doc(vec![make_flow_page(vec![Block::Paragraph(Paragraph {
         style: ParagraphStyle {
