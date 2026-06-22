@@ -139,14 +139,15 @@ fn generate_list_segment(
 ) -> Result<(), ConvertError> {
     let style: EffectiveListStyle<'_> = list_style_for_level(list, base_level);
     let representative_style: Option<&ParagraphStyle> = list_representative_style(items);
+    let wrapper_style: Option<ParagraphStyle> = list_wrapper_style(items);
     let start_at: Option<u32> = items.first().and_then(|item| item.start_at);
     let spacing_pt: Option<f64> = representative_style
         .and_then(|paragraph_style| native_list_item_spacing_pt(paragraph_style, items));
-    let has_block_wrapper: bool = representative_style.is_some_and(needs_block_wrapper);
+    let has_block_wrapper: bool = wrapper_style.as_ref().is_some_and(needs_block_wrapper);
 
     if has_block_wrapper {
         let _ = write!(out, "{prefix}block(");
-        write_block_params(out, representative_style.expect("checked is_some above"));
+        write_block_params(out, wrapper_style.as_ref().expect("checked is_some above"));
         out.push_str(")[\n");
         write_list_open(out, "#", &style, start_at, spacing_pt);
     } else {
@@ -165,6 +166,39 @@ fn list_representative_style(items: &[crate::ir::ListItem]) -> Option<&Paragraph
     items
         .iter()
         .find_map(|item| item.content.first().map(|paragraph| &paragraph.style))
+}
+
+fn list_last_item_style(items: &[crate::ir::ListItem]) -> Option<&ParagraphStyle> {
+    items
+        .iter()
+        .rev()
+        .find_map(|item| item.content.first().map(|paragraph| &paragraph.style))
+}
+
+// The wrapper block around a list represents the gap before the list begins
+// (its `above:`) and the gap after the list ends (its `below:`). Word renders
+// those from the first item's `space_before` and the LAST item's
+// `space_after` respectively; mid-list inter-item spacing is a separate
+// concern handled by the list's own `spacing:` parameter. When list items
+// have varying authored spacing (e.g. the Alfresco manual prerequisites
+// where bullets 1-2 carry w:after=102 (5.1pt) but the last bullet carries
+// w:after=202 (10.1pt)), using the first item's style for both ends
+// collapses the post-list gap and visually merges the list with the next
+// block. We therefore synthesize a wrapper style that inherits everything
+// from the first item but overrides space_after (and the line-spacing
+// metadata that effective_block_space_after_pt uses to compute line-extras)
+// from the last item.
+fn list_wrapper_style(items: &[crate::ir::ListItem]) -> Option<ParagraphStyle> {
+    let first = list_representative_style(items)?;
+    let mut wrapper = first.clone();
+    if let Some(last) = list_last_item_style(items) {
+        wrapper.space_after = last.space_after;
+        wrapper.line_spacing = last.line_spacing.clone();
+        if last.font_size.is_some() {
+            wrapper.font_size = last.font_size;
+        }
+    }
+    Some(wrapper)
 }
 
 // Word stores paragraph leading separately from paragraph spacing. For native

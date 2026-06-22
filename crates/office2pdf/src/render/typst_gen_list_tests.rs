@@ -635,3 +635,96 @@ fn test_generate_native_list_omits_zero_inter_item_spacing_parameter() {
         output.source
     );
 }
+
+#[test]
+fn test_generate_native_list_wrapper_below_uses_last_item_space_after() {
+    // The wrapper block around a list represents the gap AFTER the list
+    // ends. Word draws that from the last item's space_after, not the first
+    // item's. The Alfresco manual prereqs bullet list authored bullet[2]
+    // with w:after=202 (10.1pt) while bullets 0-1 had w:after=102 (5.1pt);
+    // before this guard the wrapper emitted below: 11.1pt (the first
+    // item's value + line-spacing extras), collapsing the gap before the
+    // numbered procedure that followed. The correct value is the last
+    // item's 10.1pt + 6pt line extras = 16.1pt.
+    use crate::ir::List;
+    let early_item_style = ParagraphStyle {
+        font_size: Some(12.0),
+        line_spacing: Some(LineSpacing::Proportional(1.5)),
+        space_after: Some(5.1),
+        ..ParagraphStyle::default()
+    };
+    let final_item_style = ParagraphStyle {
+        font_size: Some(12.0),
+        line_spacing: Some(LineSpacing::Proportional(1.5)),
+        space_after: Some(10.1),
+        ..ParagraphStyle::default()
+    };
+    let list = List {
+        kind: ListKind::Unordered,
+        items: vec![
+            ListItem {
+                content: vec![Paragraph {
+                    style: early_item_style.clone(),
+                    runs: vec![Run {
+                        text: "First".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+            ListItem {
+                content: vec![Paragraph {
+                    style: early_item_style,
+                    runs: vec![Run {
+                        text: "Middle".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+            ListItem {
+                content: vec![Paragraph {
+                    style: final_item_style,
+                    runs: vec![Run {
+                        text: "Last".to_string(),
+                        style: TextStyle::default(),
+                        href: None,
+                        footnote: None,
+                    }],
+                }],
+                level: 0,
+                start_at: None,
+            },
+        ],
+        level_styles: BTreeMap::from([(
+            0,
+            ListLevelStyle {
+                kind: ListKind::Unordered,
+                numbering_pattern: None,
+                full_numbering: false,
+                marker_text: Some("\u{2022}".to_string()),
+                marker_style: None,
+            },
+        )]),
+    };
+    let doc = make_doc(vec![make_flow_page(vec![Block::List(list)])]);
+    let output = generate_typst(&doc).unwrap();
+    assert!(
+        output.source.contains("below: 16.1pt"),
+        "Expected wrapper below: 16.1pt from last item's 10.1pt space_after \
+         + 6pt line-spacing extras, got: {}",
+        output.source
+    );
+    assert!(
+        output.source.contains("spacing: 11.1pt"),
+        "Expected in-list spacing: 11.1pt from the first item's 5.1pt \
+         space_after + 6pt extras (uniform across the list), got: {}",
+        output.source
+    );
+}
