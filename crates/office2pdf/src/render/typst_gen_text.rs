@@ -21,15 +21,30 @@ pub(super) fn generate_paragraph(out: &mut String, para: &Paragraph) -> Result<(
     }
 
     let has_para_style = needs_block_wrapper(style);
+    let is_empty = para.runs.is_empty();
 
     if has_para_style {
         out.push_str("#block(");
-        write_block_params(out, style);
+        if is_empty {
+            // Empty paragraphs are rendered as `#v(line_height)` inside the
+            // wrapper. If we also emit the regular `below:` value
+            // (zero_space_after_block_buffer_pt ~= one line) we double-count
+            // and each blank line takes ~2x the vertical space Word gives
+            // it. Word renders an empty paragraph at exactly one
+            // line-height with `w:after="0"`; we mirror that by skipping
+            // the below: term and letting `#v(...)` carry the visible
+            // spacing. Inset/justify/direction/indent are still meaningful
+            // (an empty paragraph can be authored with indent that affects
+            // following content) and are emitted normally.
+            write_block_params_empty_paragraph(out, style);
+        } else {
+            write_block_params(out, style);
+        }
         out.push_str(")[\n");
         write_par_settings(out, style);
     }
 
-    if para.runs.is_empty() {
+    if is_empty {
         let _ = write!(
             out,
             "#v({}pt)",
@@ -95,15 +110,40 @@ fn zero_space_after_block_buffer_pt(style: &ParagraphStyle) -> f64 {
 }
 
 fn paragraph_line_spacing_extra_pt(style: &ParagraphStyle) -> f64 {
-    // The portion of a paragraph's authored line height that exceeds single
-    // spacing. For 1.5x line spacing this is roughly half a line; for single
-    // spacing it is zero. Mirrors `native_list_line_spacing_extra_pt` in
-    // typst_gen_lists.rs so within-list and between-block spacing share one
-    // semantic model.
+    // The leading value Typst will apply within the paragraph, expressed in
+    // points, which we also need to lay on top of #block(below:) so that
+    // between-block gaps match within-paragraph baseline-to-baseline spacing.
+    //
+    // Empirical observation: Typst's `#block(below: X)` gives an inter-block
+    // baseline-to-baseline gap of roughly natural_font_metric + X (verified
+    // with a minimal `#block(below: 5pt)` vs `#block(below: 40pt)` test,
+    // where the gap moved from 12.9pt to 47.9pt — a perfectly linear +35pt
+    // matching the +35pt difference in `below:`). Crucially, the `leading:`
+    // set via `#set par(...)` only widens spacing *within* a paragraph; it
+    // does NOT contribute to inter-block spacing. Word's render makes no
+    // such distinction: between-paragraph baseline-to-baseline equals
+    // within-paragraph baseline-to-baseline plus w:after. To reconcile,
+    // every block needs to absorb the full leading value into its below:
+    // calculation, otherwise gaps after paragraphs render ~half-a-line
+    // shorter than Word for 1.5x spacing.
+    //
+    // For Proportional(factor), write_par_settings emits
+    // `leading: (factor * 0.65)em`, which is `factor * 0.65 * font_size`
+    // points; we match that exactly. The previous formula
+    // `font_size * (factor - 1.0)` produced half the needed value at 1.5x
+    // (6pt instead of 11.7pt at 12pt), which manifested as a uniform ~6pt
+    // undershoot at every block transition in the Alfresco Enterprise
+    // Manual measurements.
+    //
+    // Single-spacing (factor <= 1.0) and the no-line-spacing case keep their
+    // zero return for now; only the explicitly-spaced-out case is
+    // empirically verified and present in our regression document. Exact()
+    // also retains its `points - font_size` formula pending separate
+    // verification.
     let font_size_pt: f64 = style.font_size.unwrap_or(12.0);
     match style.line_spacing {
         Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
-            (font_size_pt * (factor - 1.0)).max(0.0)
+            (font_size_pt * factor * 0.65).max(0.0)
         }
         Some(LineSpacing::Exact(points)) => (points - font_size_pt).max(0.0),
         _ => 0.0,
@@ -139,6 +179,48 @@ pub(super) fn needs_block_wrapper(style: &ParagraphStyle) -> bool {
         || matches!(style.direction, Some(TextDirection::Rtl))
         || style.indent_left.is_some_and(|i| i.abs() > 0.0001)
         || style.indent_right.is_some_and(|i| i.abs() > 0.0001)
+}
+
+pub(super) fn write_block_params_empty_paragraph(out: &mut String, style: &ParagraphStyle) {
+    // For empty paragraphs, the inner `#v(line_height)` filler is the
+    // sole intended source of vertical space. We must therefore PIN both
+    // `above:` and `below:` on the wrapper to 0pt — not merely omit them.
+    // Typst falls back to its built-in default of ~1.2em per side when a
+    // block parameter is absent, which silently injects ~14.4pt of extra
+    // gap per empty paragraph (measured against Word: a title page with
+    // 13 empty spacer paragraphs picks up roughly 75pt of accidental
+    // overhead this way, pushing trailing content to the next page).
+    //
+    // We still emit any author-specified `above:` (w:before) on top of
+    // the zero pin — Word treats `w:before` as an explicit add — by
+    // letting it override the zero default.
+    let mut first = true;
+    write_param(out, &mut first, "width: 100%");
+    let above_pt = style.space_before.unwrap_or(0.0);
+    write_param(
+        out,
+        &mut first,
+        &format!("above: {}pt", format_f64(above_pt)),
+    );
+    write_param(out, &mut first, "below: 0pt");
+    let mut inset_parts: Vec<String> = Vec::new();
+    if let Some(left) = style.indent_left {
+        if left.abs() > 0.0001 {
+            inset_parts.push(format!("left: {}pt", format_f64(left)));
+        }
+    }
+    if let Some(right) = style.indent_right {
+        if right.abs() > 0.0001 {
+            inset_parts.push(format!("right: {}pt", format_f64(right)));
+        }
+    }
+    if !inset_parts.is_empty() {
+        write_param(
+            out,
+            &mut first,
+            &format!("inset: ({})", inset_parts.join(", ")),
+        );
+    }
 }
 
 pub(super) fn write_block_params(out: &mut String, style: &ParagraphStyle) {

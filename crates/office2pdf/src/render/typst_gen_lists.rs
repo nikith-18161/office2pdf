@@ -220,10 +220,20 @@ fn native_list_line_spacing_extra_pt(
     style: &ParagraphStyle,
     items: &[crate::ir::ListItem],
 ) -> Option<f64> {
+    // Mirrors paragraph_line_spacing_extra_pt in typst_gen_text.rs: returns
+    // the leading value Typst will apply *within* a paragraph (as points),
+    // which we also need to bake into the list's `spacing:` and the
+    // wrapper's `below:` so between-item and after-list gaps match
+    // within-paragraph spacing. The previous formula
+    // `font_size * (factor - 1.0)` undershot by half-a-line at 1.5x
+    // spacing because Typst's between-item / between-block gaps do not
+    // inherit `set par(leading:)`; only within-paragraph wraps do. See the
+    // corresponding comment in typst_gen_text.rs for the full empirical
+    // derivation.
     let font_size_pt: f64 = native_list_font_size_pt(style, items);
     match style.line_spacing {
         Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
-            Some((font_size_pt * (factor - 1.0)).max(0.0))
+            Some((font_size_pt * factor * 0.65).max(0.0))
         }
         Some(LineSpacing::Exact(points)) => Some((points - font_size_pt).max(0.0)),
         _ => None,

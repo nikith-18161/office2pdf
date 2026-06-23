@@ -563,12 +563,12 @@ fn test_generate_native_list_maps_paragraph_spacing_to_wrapper_and_item_spacing(
     assert!(
         output
             .source
-            .contains("#block(width: 100%, above: 4pt, below: 11.1pt)[\n#enum(")
+            .contains("#block(width: 100%, above: 4pt, below: 16.8pt)[\n#enum(")
     );
     assert!(
         output
             .source
-            .contains("numbering: \"a.\", start: 1, spacing: 11.1pt,")
+            .contains("numbering: \"a.\", start: 1, spacing: 16.8pt,")
     );
     assert!(
         !output.source.contains("#stack(dir: ttb"),
@@ -642,10 +642,10 @@ fn test_generate_native_list_wrapper_below_uses_last_item_space_after() {
     // ends. Word draws that from the last item's space_after, not the first
     // item's. The Alfresco manual prereqs bullet list authored bullet[2]
     // with w:after=202 (10.1pt) while bullets 0-1 had w:after=102 (5.1pt);
-    // before this guard the wrapper emitted below: 11.1pt (the first
+    // before this guard the wrapper emitted below: 16.8pt (the first
     // item's value + line-spacing extras), collapsing the gap before the
     // numbered procedure that followed. The correct value is the last
-    // item's 10.1pt + 6pt line extras = 16.1pt.
+    // item's 10.1pt + 6pt line extras = 21.8pt.
     use crate::ir::List;
     let early_item_style = ParagraphStyle {
         font_size: Some(12.0),
@@ -716,14 +716,14 @@ fn test_generate_native_list_wrapper_below_uses_last_item_space_after() {
     let doc = make_doc(vec![make_flow_page(vec![Block::List(list)])]);
     let output = generate_typst(&doc).unwrap();
     assert!(
-        output.source.contains("below: 16.1pt"),
-        "Expected wrapper below: 16.1pt from last item's 10.1pt space_after \
+        output.source.contains("below: 21.8pt"),
+        "Expected wrapper below: 21.8pt from last item's 10.1pt space_after \
          + 6pt line-spacing extras, got: {}",
         output.source
     );
     assert!(
-        output.source.contains("spacing: 11.1pt"),
-        "Expected in-list spacing: 11.1pt from the first item's 5.1pt \
+        output.source.contains("spacing: 16.8pt"),
+        "Expected in-list spacing: 16.8pt from the first item's 5.1pt \
          space_after + 6pt extras (uniform across the list), got: {}",
         output.source
     );
