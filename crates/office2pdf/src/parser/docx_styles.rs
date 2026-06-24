@@ -85,10 +85,35 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
             // overlaying a run's `rStyle` onto its paragraph style changes only
             // the properties the character style actually sets (issue #176).
             docx_rs::StyleType::Character => {
+                let mut text = extract_run_style(&style.run_property);
+                // Word's built-in link character styles ("Hyperlink",
+                // "FollowedHyperlink", "InternetLink") set blue text and a
+                // single underline. Those properties are an *on-screen*
+                // affordance in Word: when the same document is exported
+                // to PDF, Word drops them and renders hyperlinks (including
+                // TOC PAGEREF anchors) using the surrounding paragraph's
+                // color. Our renderer is a PDF converter, not an editor
+                // surface, so we mirror Word's PDF-export behaviour and
+                // strip color + underline from these specific styleIds.
+                // Other properties the styles set (rare in practice) pass
+                // through. This is safer than special-casing TOC
+                // paragraphs because Word's suppression applies to every
+                // run that references one of these built-in link styles,
+                // not just TOC entries — and the alternative (threading
+                // hyperlink-kind context all the way down to run
+                // extraction) would change several signatures for the
+                // sake of a single cosmetic rule.
+                if matches!(
+                    style.style_id.as_str(),
+                    "Hyperlink" | "FollowedHyperlink" | "InternetLink"
+                ) {
+                    text.color = None;
+                    text.underline = None;
+                }
                 map.insert(
                     style.style_id.clone(),
                     ResolvedStyle {
-                        text: extract_run_style(&style.run_property),
+                        text,
                         paragraph: ParagraphStyle::default(),
                         paragraph_tab_overrides: None,
                         heading_level: None,

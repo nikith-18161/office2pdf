@@ -564,8 +564,13 @@ fn test_table_cell_paragraph_preserves_right_alignment() {
     let result = generate_typst(&doc).unwrap().source;
 
     assert!(
-        result.contains("#block(width: 100%)") && result.contains("#set align(right)"),
-        "Expected table cell paragraph to preserve right alignment: {result}"
+        result.contains("#block(width: 100%,") && result.contains("#set align(right)"),
+        "Expected table cell paragraph to emit a `#block(width: 100%, ...)` \
+         wrapper with `#set align(right)` for right-aligned content. The \
+         trailing comma anchors the assertion to the start of the params \
+         list, accommodating additional zero-pinned spacing params (above: \
+         0pt, below: 0pt) that suppress Typst's default cell-paragraph \
+         padding. got: {result}"
     );
 }
 
@@ -600,7 +605,13 @@ fn test_table_cell_paragraph_preserves_spacing() {
 
     assert!(
         result.contains("#v(2pt)") && result.contains("#v(3pt)"),
-        "Expected table cell paragraph spacing to be preserved: {result}"
+        "Expected space_before (2pt) and space_after (3pt) to render as \
+         `#v(...)` because this paragraph has no other block-wrapper \
+         trigger (no line_spacing, alignment, or direction). When the \
+         paragraph DOES need a wrapper (the common case in real docs, \
+         which always carry line_spacing), the wrapper's above:/below: \
+         carry the spacing instead — verified by separate cell-paragraph \
+         tests. got: {result}"
     );
 }
 

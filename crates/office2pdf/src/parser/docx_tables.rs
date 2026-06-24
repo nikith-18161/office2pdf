@@ -437,10 +437,16 @@ fn extract_cell_borders(borders_json: &serde_json::Value) -> Option<CellBorder> 
     let left = extract_side("left");
     let right = extract_side("right");
 
-    if top.is_none() && bottom.is_none() && left.is_none() && right.is_none() {
-        return None;
-    }
-
+    // Always return Some when <w:tcBorders> was present (even with every side
+    // set to "nil"). The presence of the borders node, however empty its
+    // sides, is a positive signal from the document author that this cell's
+    // border treatment is intentional. Returning None here erases that
+    // intent and lets the table fall back to Typst's default solid borders,
+    // which misrenders authored borderless tables (notably DOCX-authored
+    // TOC frames, which use a <w:tbl> as a layout container with every
+    // <w:tcBorders> side set to nil). The downstream renderer's
+    // table_has_explicit_cell_borders check now treats a Some(CellBorder
+    // { all None }) as a meaningful "borders suppressed" signal.
     Some(CellBorder {
         top,
         bottom,

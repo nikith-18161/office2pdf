@@ -100,7 +100,7 @@ fn natural_single_line_height_pt(style: &ParagraphStyle) -> f64 {
     }
 }
 
-fn empty_paragraph_height_pt(style: &ParagraphStyle) -> f64 {
+pub(super) fn empty_paragraph_height_pt(style: &ParagraphStyle) -> f64 {
     natural_single_line_height_pt(style)
 }
 
@@ -109,7 +109,7 @@ fn zero_space_after_block_buffer_pt(style: &ParagraphStyle) -> f64 {
     (unclamped_buffer_pt * 100.0).round() / 100.0
 }
 
-fn paragraph_line_spacing_extra_pt(style: &ParagraphStyle) -> f64 {
+pub(super) fn paragraph_line_spacing_extra_pt(style: &ParagraphStyle) -> f64 {
     // The leading value Typst will apply within the paragraph, expressed in
     // points, which we also need to lay on top of #block(below:) so that
     // between-block gaps match within-paragraph baseline-to-baseline spacing.
@@ -142,11 +142,19 @@ fn paragraph_line_spacing_extra_pt(style: &ParagraphStyle) -> f64 {
     // verification.
     let font_size_pt: f64 = style.font_size.unwrap_or(12.0);
     match style.line_spacing {
-        Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
-            (font_size_pt * factor * 0.65).max(0.0)
-        }
+        // Single line spacing (factor = 1.0) is NOT a no-op the way the
+        // previous `factor > 1.0` guard implied: Typst still applies
+        // `leading: (factor * 0.65)em` from write_par_settings, so the
+        // between-block gap still needs the same contribution to match
+        // within-paragraph baseline-to-baseline. Dropping the guard
+        // restores ~7.8pt of inter-paragraph gap at 12pt/single-line,
+        // which is what makes consecutive paragraphs inside table cells
+        // (e.g. the Alfresco manual's "Document Authorisation" cell with
+        // name + role on two single-spaced lines) stack at one
+        // line-height instead of collapsing into each other.
+        Some(LineSpacing::Proportional(factor)) => (font_size_pt * factor * 0.65).max(0.0),
         Some(LineSpacing::Exact(points)) => (points - font_size_pt).max(0.0),
-        _ => 0.0,
+        None => 0.0,
     }
 }
 
@@ -161,13 +169,26 @@ fn effective_block_space_after_pt(style: &ParagraphStyle) -> f64 {
     // spacing, so block boundaries and list-item boundaries follow one rule.
     //
     // Negative space_after (an explicit overlap hint) is passed through
-    // unchanged; the empty-paragraph buffer continues to apply when
-    // space_after is unset or zero.
+    // unchanged.
+    //
+    // Some(0.0) — explicit `w:after="0"` from the author — must be honoured
+    // as a directive ("no extra space after this paragraph"), not coerced
+    // into the empty-paragraph buffer. Densely packed paragraph styles like
+    // TOC1/TOC2/TOC3 use w:after=0 to stack entries flush; applying a
+    // ~13pt buffer to those collapses ~3 entries per page worth of vertical
+    // space and adds a TOC-overflow page (the Alfresco manual TOC needs 17
+    // pages instead of Word's 16 without this guard). For Some(0.0) we
+    // still emit line_extras so that between-block gap equals
+    // within-paragraph baseline-to-baseline, matching Word's behaviour for
+    // contiguous paragraphs of the same style. None remains the only path
+    // to the empty-paragraph buffer (truly unset = caller didn't express
+    // an intent, so we backfill a sensible default).
     let line_extras = paragraph_line_spacing_extra_pt(style);
     match style.space_after {
         Some(space_after) if space_after > 0.0 => space_after + line_extras,
         Some(space_after) if space_after < 0.0 => space_after,
-        Some(_) | None => zero_space_after_block_buffer_pt(style),
+        Some(_) => line_extras,
+        None => zero_space_after_block_buffer_pt(style),
     }
 }
 

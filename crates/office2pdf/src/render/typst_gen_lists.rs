@@ -232,11 +232,14 @@ fn native_list_line_spacing_extra_pt(
     // derivation.
     let font_size_pt: f64 = native_list_font_size_pt(style, items);
     match style.line_spacing {
-        Some(LineSpacing::Proportional(factor)) if factor > 1.0 => {
-            Some((font_size_pt * factor * 0.65).max(0.0))
-        }
+        // Single-spaced lists still need this contribution; see the matching
+        // guard removal in paragraph_line_spacing_extra_pt in
+        // typst_gen_text.rs for the rationale (Typst applies `leading:` for
+        // factor=1.0 too, so between-block parity requires we bake it in
+        // even at single spacing).
+        Some(LineSpacing::Proportional(factor)) => Some((font_size_pt * factor * 0.65).max(0.0)),
         Some(LineSpacing::Exact(points)) => Some((points - font_size_pt).max(0.0)),
-        _ => None,
+        None => None,
     }
 }
 

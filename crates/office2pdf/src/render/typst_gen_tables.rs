@@ -105,13 +105,22 @@ fn generate_table_inner(
 }
 
 fn table_has_explicit_cell_borders(table: &Table) -> bool {
-    table.rows.iter().any(|row| {
-        row.cells
-            .iter()
-            .any(|cell| cell.border.as_ref().is_some_and(cell_border_has_side))
-    })
+    // Returns true if ANY cell authored a <w:tcBorders> entry, whether the
+    // sides inside are populated or all suppressed (= explicitly no border).
+    // We use this to gate emitting `stroke: none` at the table level: when
+    // the document expressed any opinion about borders, we suppress Typst's
+    // default solid borders and let the per-cell stroke (or lack thereof)
+    // drive rendering. This is what makes TOC frames (every side nil) and
+    // ordinary tables with real borders both render correctly: in the
+    // former, the cell emits no stroke param so it stays borderless; in
+    // the latter, the cell emits its authored stroke directly.
+    table
+        .rows
+        .iter()
+        .any(|row| row.cells.iter().any(|cell| cell.border.is_some()))
 }
 
+#[allow(dead_code)] // retained for symmetry with cell-level border queries
 fn cell_border_has_side(border: &CellBorder) -> bool {
     border.top.is_some()
         || border.bottom.is_some()
@@ -384,7 +393,7 @@ fn generate_cell_paragraph(out: &mut String, para: &Paragraph) {
 
     if has_block_wrapper {
         out.push_str("#block(");
-        write_cell_paragraph_block_params(out, align_str.is_some());
+        write_cell_paragraph_block_params(out, style, align_str.is_some());
         out.push_str(")[\n");
         write_par_settings(out, style);
         if let Some(align_str) = align_str {
@@ -392,14 +401,42 @@ fn generate_cell_paragraph(out: &mut String, para: &Paragraph) {
         }
     }
 
-    if let Some(space_before) = style.space_before {
-        let _ = writeln!(out, "#v({}pt)", format_f64(space_before));
+    // When the paragraph has a block wrapper, the wrapper's `above:` and
+    // `below:` parameters carry the spacing — emitting `#v(space_before)`
+    // and `#v(space_after)` on top would double-count. When there is no
+    // wrapper (no line_spacing, alignment, or direction), the wrapper
+    // can't carry anything and we fall back to the original `#v(...)`
+    // emissions so the spacing still renders.
+    if !has_block_wrapper {
+        if let Some(space_before) = style.space_before {
+            let _ = writeln!(out, "#v({}pt)", format_f64(space_before));
+        }
     }
 
-    generate_runs_with_tabs(out, &para.runs, style.tab_stops.as_deref());
+    if para.runs.is_empty() {
+        // Empty paragraphs inside table cells should reserve one line of
+        // vertical space, just like empty paragraphs outside cells. Word
+        // uses leading empty paragraphs at the top of a cell to create
+        // visible top padding (e.g. the DOCUMENT AUTHORISATION table's
+        // "Prepared By:" cell starts with one empty <w:p> followed by the
+        // label; without the #v(...) filler the cell label sits flush
+        // against the top border). The body-paragraph path handles this
+        // via `if para.runs.is_empty() { #v(empty_paragraph_height_pt) }`;
+        // we mirror it here so cell layout matches Word's vertical
+        // distribution.
+        let _ = write!(
+            out,
+            "#v({}pt)",
+            format_f64(empty_paragraph_height_pt(style))
+        );
+    } else {
+        generate_runs_with_tabs(out, &para.runs, style.tab_stops.as_deref());
+    }
 
-    if let Some(space_after) = style.space_after {
-        let _ = write!(out, "\n#v({}pt)", format_f64(space_after));
+    if !has_block_wrapper {
+        if let Some(space_after) = style.space_after {
+            let _ = write!(out, "\n#v({}pt)", format_f64(space_after));
+        }
     }
 
     if has_block_wrapper {
@@ -413,10 +450,49 @@ fn cell_paragraph_needs_block_wrapper(style: &ParagraphStyle) -> bool {
         || matches!(style.direction, Some(TextDirection::Rtl))
 }
 
-fn write_cell_paragraph_block_params(out: &mut String, needs_full_width: bool) {
+fn write_cell_paragraph_block_params(
+    out: &mut String,
+    style: &ParagraphStyle,
+    needs_full_width: bool,
+) {
+    // Cell-paragraph spacing rules, derived empirically:
+    //
+    //   above: always 0pt. Word doesn't add space *before* a paragraph in a
+    //          cell beyond what the previous paragraph's w:after produced;
+    //          pinning above:0 prevents Typst's default ~1.2em from
+    //          accidentally adding ~14pt before each block.
+    //
+    //   below: max(0, space_after) + line_extras. The line_extras term
+    //          (`paragraph_line_spacing_extra_pt`, e.g. 12pt * 1.5 * 0.65 =
+    //          11.7pt at 12pt/1.5x) is the leading value Typst applies
+    //          *within* a paragraph but NOT between blocks, so we bake it
+    //          into below: to keep between-paragraph gap equal to
+    //          within-paragraph baseline-to-baseline. Adding space_after
+    //          on top gives Word's familiar "line height plus w:after"
+    //          model. For space_after == Some(0.0), below: collapses to
+    //          just line_extras (dense TOC entries), which is what Word
+    //          renders for w:after="0". For space_after == None, below:
+    //          is line_extras alone — cells default to flush stacking,
+    //          unlike body paragraphs which apply an empty-paragraph
+    //          buffer for None.
+    //
+    // The previous version of this function pinned BOTH above and below to
+    // 0pt unconditionally, which collapsed cell paragraphs to font-content
+    // height (~8pt at 12pt) instead of one line-height (~20pt). That
+    // over-corrected from the original ~14pt over-padding into ~12pt
+    // under-padding, and the Alfresco TOC went from 17 pages to 13.
     let mut first = true;
 
     if needs_full_width {
         write_param(out, &mut first, "width: 100%");
     }
+    write_param(out, &mut first, "above: 0pt");
+    let line_extras = paragraph_line_spacing_extra_pt(style);
+    let positive_space_after = style.space_after.filter(|v| *v > 0.0).unwrap_or(0.0);
+    let below_pt = positive_space_after + line_extras;
+    write_param(
+        out,
+        &mut first,
+        &format!("below: {}pt", format_f64(below_pt)),
+    );
 }

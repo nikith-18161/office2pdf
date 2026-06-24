@@ -627,7 +627,13 @@ fn test_generate_native_list_omits_zero_inter_item_spacing_parameter() {
     assert!(
         output
             .source
-            .contains("#block(width: 100%, below: 14.4pt)[\n#list(")
+            .contains("#block(width: 100%, below: 0pt)[\n#list("),
+        "Explicit `space_after: Some(0.0)` should render as a literal \
+         below: 0pt, not the empty-paragraph buffer (~14.4pt). The buffer \
+         is reserved for paragraphs whose space_after is truly None (unset); \
+         a 0.0 value is an explicit author directive that must be honoured. \
+         got: {}",
+        output.source
     );
     assert!(
         !output.source.contains("#list(spacing:"),
