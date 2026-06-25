@@ -53,11 +53,62 @@ fn extract_insets_from_margins_json(margins_json: &serde_json::Value) -> Option<
         return None;
     }
 
+    // OOXML sibling defaults: when only some sides of <w:tblCellMar> are
+    // specified, the omitted sides take their value from the document's
+    // default table style. In practice Word renders the built-in Normal
+    // Table style with ~5.4pt (108 twips) padding on every side. The
+    // Alfresco manual's body tables specify top/left/right and leave
+    // bottom unset, which previously rendered as `bottom: 0pt` and gave
+    // cell rows ~13pt baseline-to-baseline instead of Word's ~22pt.
+    // Filling in unspecified sides with the conservative 5.4pt default
+    // restores Word-like vertical breathing room for cells; explicit
+    // values still win since they're matched before `unwrap_or` falls
+    // back.
+    // docx-rs's JSON serialization fills in every side of <w:tblCellMar>
+    // with {val: 0, widthType: "dxa"} even when the underlying XML omits
+    // them — so `bottom == Some(0.0)` is the indistinguishable signal for
+    // both "author explicitly wrote 0" and "author omitted the side and
+    // wants the table-style default". We can't tell them apart from the
+    // parsed JSON. In practice authored docx files virtually never specify
+    // a literal 0 cell margin (Word's defaults are ~5.4pt and authors
+    // either accept those or set non-zero overrides), so we treat
+    // Some(0.0) as the "fall back to default" signal. This matches Word's
+    // visual rendering for the Alfresco manual's body tables, which leave
+    // bottom unspecified and would otherwise render cells with no bottom
+    // breathing room.
+    const OOXML_DEFAULT_CELL_MARGIN_PT: f64 = 5.4;
+    let t = top.unwrap_or(0.0);
+    let r = right.unwrap_or(0.0);
+    let b = bottom.unwrap_or(0.0);
+    let l = left.unwrap_or(0.0);
+
+    // Differentiation rule: we can't tell "author wrote 0" from "author
+    // omitted side" by looking at the JSON alone (docx-rs serializes both
+    // as Some(0.0)). But we CAN distinguish at the table level by the
+    // overall pattern: if all four sides are zero, the author either wrote
+    // <w:tblCellMar> with all zeros, or no <w:tblCellMar> exists at all
+    // and docx-rs synthesized one — in both cases the intent is "no cell
+    // padding" (this is what authored layout tables like the Alfresco
+    // manual's TOC frame depend on). When SOME sides are non-zero, the
+    // zero sides are almost certainly omitted-and-defaulted by Word at
+    // render time, and we should fill them in with the OOXML default
+    // (5.4pt) to match Word's visible breathing room. The body tables in
+    // the Alfresco manual specify top/left/right and leave bottom unset,
+    // so this rule applies the default only to bottom and gives cells the
+    // ~22pt row-to-row baselines Word renders.
+    let all_zero = t == 0.0 && r == 0.0 && b == 0.0 && l == 0.0;
+    let resolve = |v: f64| -> f64 {
+        if v > 0.0 || all_zero {
+            v
+        } else {
+            OOXML_DEFAULT_CELL_MARGIN_PT
+        }
+    };
     Some(Insets {
-        top: top.unwrap_or_default(),
-        right: right.unwrap_or_default(),
-        bottom: bottom.unwrap_or_default(),
-        left: left.unwrap_or_default(),
+        top: resolve(t),
+        right: resolve(r),
+        bottom: resolve(b),
+        left: resolve(l),
     })
 }
 
