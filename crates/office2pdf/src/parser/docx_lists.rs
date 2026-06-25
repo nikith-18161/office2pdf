@@ -13,11 +13,24 @@ pub(super) struct NumInfo {
 struct ResolvedListLevel {
     style: ListLevelStyle,
     start: u32,
+    /// The raw <w:lvlText> format string from numbering.xml (e.g.
+    /// "%1.%2.%3.%4"). Used by heading numbering to format the document
+    /// counter into a section number like "2.2.4.12".
+    raw_level_text: String,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct ResolvedNumbering {
     levels: BTreeMap<u32, ResolvedListLevel>,
+}
+
+impl ResolvedNumbering {
+    /// Get the raw lvlText format string and start value for a level.
+    /// Used by the heading-counter renderer to format the section number.
+    pub(super) fn level_info(&self, level: u32) -> Option<(&str, u32)> {
+        let lvl = self.levels.get(&level)?;
+        Some((lvl.raw_level_text.as_str(), lvl.start))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +185,7 @@ fn resolve_numbering(
             (
                 *level_index,
                 ResolvedListLevel {
+                    raw_level_text: level.level_text.clone(),
                     style: ListLevelStyle {
                         kind,
                         numbering_pattern,

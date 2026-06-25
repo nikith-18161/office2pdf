@@ -15,6 +15,21 @@ pub(super) fn generate_paragraph(out: &mut String, para: &Paragraph) -> Result<(
 
     if let Some(level) = style.heading_level {
         let _ = write!(out, "#heading(level: {level})[");
+        // Prepend Word's auto-numbering prefix (e.g. "2.2.4.12 ") when this
+        // heading's style carried <w:numPr> in styles.xml and the parser
+        // computed the formatted counter. Without this prefix our renders
+        // would show "Supported platforms" where Word shows "2.2.4.12
+        // Supported platforms" — a substantial readability issue for
+        // technical documents whose body cross-references rely on numbered
+        // section identifiers. We emit the prefix as plain text via
+        // generate_runs_with_tabs's surrounding context (a #text macro is
+        // applied to runs, but raw prefix text inside #heading[] inherits
+        // the heading's typography automatically).
+        if let Some(prefix) = style.heading_number.as_ref() {
+            // Use a non-breaking space so PDF text extraction keeps the
+            // number attached to the title (matching Word's behavior).
+            let _ = write!(out, "{prefix}\u{a0}");
+        }
         generate_runs_with_tabs(out, &para.runs, style.tab_stops.as_deref());
         out.push_str("]\n");
         return Ok(());

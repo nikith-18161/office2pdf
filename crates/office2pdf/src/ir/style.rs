@@ -27,6 +27,15 @@ pub struct ParagraphStyle {
     /// Heading level (1 = H1, 2 = H2, ..., 6 = H6). When set, the paragraph
     /// is emitted as a Typst `#heading` element for proper PDF structure tagging.
     pub heading_level: Option<u8>,
+    /// Pre-formatted section number for this heading (e.g. "2.2.4.12"). When
+    /// the heading style references a multilevel numbering scheme via numPr,
+    /// the parser computes the formatted counter for this paragraph by
+    /// walking the document's heading-counter state and applying the
+    /// matching `<w:lvlText>` format string from numbering.xml. The renderer
+    /// emits this prefix before the heading's text runs so body headings
+    /// match Word's auto-numbered rendering (e.g. "2.2.4.12 Supported
+    /// platforms"). None means no auto-numbering applies.
+    pub heading_number: Option<String>,
     /// Text direction for bidirectional rendering (RTL for Arabic/Hebrew).
     pub direction: Option<TextDirection>,
     /// Custom tab stop positions for this paragraph.

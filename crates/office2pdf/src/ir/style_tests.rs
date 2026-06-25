@@ -179,6 +179,7 @@ fn paragraph_style_merge_from_all_none_source_preserves_target() {
         space_before: Some(6.0),
         space_after: Some(12.0),
         heading_level: Some(2),
+        heading_number: None,
         direction: Some(TextDirection::Rtl),
         tab_stops: Some(vec![TabStop {
             position: 72.0,
@@ -222,6 +223,7 @@ fn paragraph_style_merge_from_all_some_source_overwrites_target() {
         space_before: Some(8.0),
         space_after: Some(16.0),
         heading_level: Some(1),
+        heading_number: None,
         direction: Some(TextDirection::Rtl),
         tab_stops: Some(vec![TabStop {
             position: 144.0,

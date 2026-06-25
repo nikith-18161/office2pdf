@@ -18,11 +18,11 @@ use crate::parser::Parser;
 use self::contexts::scan_table_headers;
 use self::contexts::{
     BidiContext, ChartContext, DocxConversionContext, DrawingShapeContext, DrawingTextBoxContext,
-    DrawingTextBoxInfo, MathContext, NoteContext, SmallCapsContext, TableHeaderContext,
-    VmlTextBoxContext, VmlTextBoxInfo, WrapContext, build_chart_context_from_xml,
-    build_math_context_from_xml, build_note_context_from_xml, build_wrap_context_from_xml,
-    extract_column_layout_from_section_property, is_note_reference_run, read_zip_text,
-    scan_column_layouts,
+    DrawingTextBoxInfo, HeadingCounterContext, MathContext, NoteContext, SmallCapsContext,
+    TableHeaderContext, VmlTextBoxContext, VmlTextBoxInfo, WrapContext,
+    build_chart_context_from_xml, build_math_context_from_xml, build_note_context_from_xml,
+    build_wrap_context_from_xml, extract_column_layout_from_section_property,
+    is_note_reference_run, read_zip_text, scan_column_layouts,
 };
 use self::lists::{
     NumberingMap, TaggedElement, build_numbering_map, extract_num_info, group_into_lists,
@@ -133,6 +133,7 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
                 vml_text_boxes,
                 bidi,
                 small_caps,
+                heading_counter: HeadingCounterContext::new(),
             };
             ZipPreParseAssets {
                 metadata,
@@ -154,6 +155,7 @@ fn build_zip_preparse_assets(data: &[u8]) -> ZipPreParseAssets {
                 vml_text_boxes: VmlTextBoxContext::from_xml(None),
                 bidi: BidiContext::from_xml(None),
                 small_caps: SmallCapsContext::from_xml(None),
+                heading_counter: HeadingCounterContext::new(),
             },
             math: MathContext::empty(),
             chart_ctx: ChartContext::empty(),
@@ -260,6 +262,7 @@ impl Parser for DocxParser {
                         &images,
                         &hyperlinks,
                         &style_map,
+                        &numberings,
                         &ctx,
                     )];
                     // Inject math equations for this body child
@@ -285,7 +288,7 @@ impl Parser for DocxParser {
                     ))])]
                 }
                 docx_rs::DocumentChild::StructuredDataTag(sdt) => {
-                    convert_sdt_children(sdt, &images, &hyperlinks, &style_map, &ctx)
+                    convert_sdt_children(sdt, &images, &hyperlinks, &style_map, &numberings, &ctx)
                 }
                 _ => vec![TaggedElement::Plain(vec![])],
             }));
@@ -362,6 +365,7 @@ fn convert_sdt_children(
     images: &ImageMap,
     hyperlinks: &HyperlinkMap,
     style_map: &StyleMap,
+    numberings: &NumberingMap,
     ctx: &DocxConversionContext,
 ) -> Vec<TaggedElement> {
     let mut result = Vec::new();
@@ -369,7 +373,7 @@ fn convert_sdt_children(
         match child {
             docx_rs::StructuredDataTagChild::Paragraph(para) => {
                 result.push(convert_paragraph_element(
-                    para, images, hyperlinks, style_map, ctx,
+                    para, images, hyperlinks, style_map, numberings, ctx,
                 ));
             }
             docx_rs::StructuredDataTagChild::Table(table) => {
@@ -379,7 +383,7 @@ fn convert_sdt_children(
             }
             docx_rs::StructuredDataTagChild::StructuredDataTag(nested) => {
                 result.extend(convert_sdt_children(
-                    nested, images, hyperlinks, style_map, ctx,
+                    nested, images, hyperlinks, style_map, numberings, ctx,
                 ));
             }
             _ => {}
@@ -390,11 +394,42 @@ fn convert_sdt_children(
 
 /// Convert a docx-rs Paragraph into a TaggedElement.
 /// If the paragraph has numbering, returns a `ListParagraph`; otherwise `Plain`.
+
+/// Format a Word lvlText pattern (e.g. "%1.%2.%3.%4") using counter values.
+/// `%N` refers to the 1-indexed counter at ilvl=N-1. Counters beyond the
+/// pattern's references are ignored; references beyond available counters
+/// render as 0 (matches Word's behavior for partially-initialized levels).
+fn format_heading_number(pattern: &str, counters: &[u32]) -> String {
+    let mut out = String::with_capacity(pattern.len() + 8);
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            if let Some(&next) = chars.peek() {
+                if next.is_ascii_digit() {
+                    chars.next();
+                    let idx = (next as u32 - '0' as u32) as usize;
+                    if idx >= 1 {
+                        let counter_idx = idx - 1;
+                        let value = counters.get(counter_idx).copied().unwrap_or(0);
+                        out.push_str(&value.to_string());
+                        continue;
+                    }
+                }
+            }
+            out.push(c);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn convert_paragraph_element(
     para: &docx_rs::Paragraph,
     images: &ImageMap,
     hyperlinks: &HyperlinkMap,
     style_map: &StyleMap,
+    numberings: &NumberingMap,
     ctx: &DocxConversionContext,
 ) -> TaggedElement {
     let num_info = extract_num_info(para);
@@ -402,6 +437,46 @@ fn convert_paragraph_element(
     // Build the paragraph IR
     let mut blocks = Vec::new();
     convert_paragraph_blocks(para, &mut blocks, images, hyperlinks, style_map, ctx);
+
+    // Heading auto-numbering: if this paragraph references a heading style
+    // whose styles.xml definition carries <w:numPr>, advance the heading
+    // counter for the (numId, ilvl) tuple and format the result with the
+    // matching <w:lvlText> pattern. Heading paragraphs in this scheme have
+    // no inline numPr (numbering is inherited from the style), so
+    // extract_num_info(para) returns None and the paragraph passes through
+    // as Plain — which is when we mutate. We deliberately skip paragraphs
+    // with inline numPr (list items): those are handled by the list code
+    // path and shouldn't double-count as heading levels.
+    // Word's "suppress style's numbering" marker is an inline
+    // <w:numPr><w:numId w:val="0"/></w:numPr> on the paragraph. Our
+    // extract_num_info returns None for those (it skips numId==0), so
+    // num_info.is_none() alone isn't enough to prove the paragraph wants
+    // style-inherited numbering. We additionally check that the paragraph
+    // has NO inline numPr at all — only then does it fall back to the
+    // style's numbering. Heading paragraphs in front-matter (cover page,
+    // TOC, authorisation tables, etc.) carry numId=0 to explicitly
+    // suppress the section counter, and Word renders them without numbers.
+    let has_inline_numpr = para.property.numbering_property.is_some();
+    if num_info.is_none()
+        && !has_inline_numpr
+        && let Some(style_id) = para.property.style.as_ref().map(|s| s.val.clone())
+        && let Some(resolved) = style_map.get(&style_id)
+        && let (Some(_heading_level), Some(style_num)) =
+            (resolved.heading_level, resolved.style_num_info.as_ref())
+        && let Some(numbering) = numberings.get(&style_num.num_id)
+        && let Some((lvl_text, start)) = numbering.level_info(style_num.level)
+    {
+        let counters = ctx
+            .heading_counter
+            .advance(style_num.num_id, style_num.level, start);
+        let formatted = format_heading_number(lvl_text, &counters);
+        for block in blocks.iter_mut() {
+            if let Block::Paragraph(p) = block {
+                p.style.heading_number = Some(formatted.clone());
+                break;
+            }
+        }
+    }
 
     match num_info {
         Some(info) => {

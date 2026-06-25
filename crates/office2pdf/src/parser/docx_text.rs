@@ -27,6 +27,7 @@ pub(super) fn extract_paragraph_style(prop: &docx_rs::ParagraphProperty) -> Para
         space_before,
         space_after,
         heading_level: None,
+        heading_number: None,
         direction: None,
         tab_stops,
     }
@@ -60,6 +61,7 @@ fn extract_paragraph_style_from_json(prop: &serde_json::Value) -> ParagraphStyle
         space_before,
         space_after,
         heading_level: None,
+        heading_number: None,
         direction: None,
         tab_stops,
     }

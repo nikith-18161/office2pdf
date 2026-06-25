@@ -15,6 +15,13 @@ pub(super) struct ResolvedStyle {
     pub(super) paragraph_tab_overrides: Option<Vec<TabStopOverride>>,
     /// Heading level from outline_lvl (0 = Heading 1, 1 = Heading 2, ..., 5 = Heading 6).
     pub(super) heading_level: Option<usize>,
+    /// Numbering info read from the style's own <w:numPr> (i.e. inherited by
+    /// any paragraph that uses this style). This is how Word's built-in
+    /// Heading1-9 styles point at a multilevel numbering scheme (numId=1,
+    /// ilvl=0..3) — heading paragraphs in the body don't carry an inline
+    /// <w:numPr>, they inherit it from the style. None means the style has
+    /// no numbering attached, so paragraphs using it render unnumbered.
+    pub(super) style_num_info: Option<super::lists::NumInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +40,18 @@ use crate::defaults::HEADING_FONT_SIZES;
 
 /// Build a map from style ID → resolved formatting by extracting formatting
 /// from each style's run_property and paragraph_property.
+/// Extract <w:numPr> from a docx-rs ParagraphProperty if present.
+/// Returns None when the style has no numbering reference or numId == 0.
+fn extract_style_num_info(prop: &docx_rs::ParagraphProperty) -> Option<super::lists::NumInfo> {
+    let np = prop.numbering_property.as_ref()?;
+    let num_id = np.id.as_ref()?.id;
+    if num_id == 0 {
+        return None;
+    }
+    let level = np.level.as_ref().map_or(0, |l| l.val as u32);
+    Some(super::lists::NumInfo { num_id, level })
+}
+
 pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
     let mut map = StyleMap::new();
     let default_text: TextStyle = extract_doc_default_text_style(styles);
@@ -45,6 +64,7 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
             paragraph: default_paragraph,
             paragraph_tab_overrides: None,
             heading_level: None,
+            style_num_info: None,
         },
     );
 
@@ -69,6 +89,7 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
                     .map(|outline_level| outline_level.v)
                     .filter(|&value| value < 6);
 
+                let style_num_info = extract_style_num_info(&style.paragraph_property);
                 map.insert(
                     style.style_id.clone(),
                     ResolvedStyle {
@@ -76,6 +97,7 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
                         paragraph,
                         paragraph_tab_overrides,
                         heading_level,
+                        style_num_info,
                     },
                 );
             }
@@ -117,6 +139,7 @@ pub(super) fn build_style_map(styles: &docx_rs::Styles) -> StyleMap {
                         paragraph: ParagraphStyle::default(),
                         paragraph_tab_overrides: None,
                         heading_level: None,
+                        style_num_info: None,
                     },
                 );
             }
@@ -194,6 +217,7 @@ pub(super) fn merge_paragraph_style(
         heading_level: style
             .and_then(|resolved_style| resolved_style.heading_level)
             .map(|level| (level + 1) as u8),
+        heading_number: None,
         direction: explicit.direction,
         tab_stops: merge_tab_stops(
             explicit.tab_stops.as_deref(),
