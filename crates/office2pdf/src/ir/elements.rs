@@ -6,6 +6,37 @@ use super::style::{Alignment, Color, ParagraphStyle, TextStyle};
 #[derive(Debug, Clone)]
 pub struct HeaderFooter {
     pub paragraphs: Vec<HeaderFooterParagraph>,
+    /// Optional top border, populated when the header/footer was authored
+    /// as a layout table with a `<w:tblBorders><w:top .../></w:tblBorders>`.
+    /// Word renders these as a horizontal rule above the content (the
+    /// classic "Page X / Document Title" separator line). Rendered by the
+    /// Typst emitter as a #line before the header/footer paragraphs.
+    pub top_border: Option<HFBorder>,
+    /// Optional bottom border, populated when the header was authored as a
+    /// layout table whose cells specify `<w:tcBorders><w:bottom .../>`
+    /// (cell-level bottom rule). Word renders these as a horizontal rule
+    /// BELOW the header content — the typical "document title + section
+    /// info" separator line that appears between the header text and the
+    /// body. Rendered by the Typst emitter as a #line after the
+    /// header/footer paragraphs.
+    pub bottom_border: Option<HFBorder>,
+}
+
+/// A border on a header/footer container.
+#[derive(Debug, Clone, Copy)]
+pub struct HFBorder {
+    /// Thickness in points (Word's `w:sz` is in eighths of a point;
+    /// converted here for direct use in Typst).
+    pub thickness_pt: f64,
+    /// Border style, mapped from OOXML's `w:val` (e.g. "thickThinSmallGap"
+    /// becomes a double-line render; "single" stays single).
+    pub style: HFBorderStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HFBorderStyle {
+    Single,
+    Double,
 }
 
 /// A paragraph within a header or footer.

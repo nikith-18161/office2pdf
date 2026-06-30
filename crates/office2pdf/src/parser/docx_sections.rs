@@ -3,8 +3,8 @@ use std::io::{Read, Seek};
 
 use crate::error::ConvertWarning;
 use crate::ir::{
-    Block, ColumnLayout, FlowPage, HFInline, HeaderFooter, HeaderFooterParagraph, Margins,
-    PageSize, ParagraphStyle, Run, TextStyle,
+    Block, ColumnLayout, FlowPage, HFBorder, HFBorderStyle, HFInline, HeaderFooter,
+    HeaderFooterParagraph, Margins, PageSize, ParagraphStyle, Run, TextStyle,
 };
 
 use super::{
@@ -200,13 +200,23 @@ pub(super) fn build_flow_page_from_section(
 
 fn convert_docx_header(header: &docx_rs::Header) -> Option<HeaderFooter> {
     let mut paragraphs = Vec::new();
+    let mut top_border: Option<HFBorder> = None;
+    let mut bottom_border: Option<HFBorder> = None;
     for child in &header.children {
         match child {
             docx_rs::HeaderChild::Paragraph(paragraph) => {
                 paragraphs.push(convert_hf_paragraph(paragraph));
             }
             docx_rs::HeaderChild::Table(table) => {
-                paragraphs.extend(convert_hf_table_to_paragraphs(table));
+                let (table_paragraphs, table_top_border, table_bottom_border) =
+                    convert_hf_table_to_paragraphs(table);
+                paragraphs.extend(table_paragraphs);
+                if top_border.is_none() {
+                    top_border = table_top_border;
+                }
+                if bottom_border.is_none() {
+                    bottom_border = table_bottom_border;
+                }
             }
             docx_rs::HeaderChild::StructuredDataTag(_) => {}
         }
@@ -214,17 +224,31 @@ fn convert_docx_header(header: &docx_rs::Header) -> Option<HeaderFooter> {
     if paragraphs.is_empty() {
         return None;
     }
-    Some(HeaderFooter { paragraphs })
+    Some(HeaderFooter {
+        paragraphs,
+        top_border,
+        bottom_border,
+    })
 }
 fn convert_docx_footer(footer: &docx_rs::Footer) -> Option<HeaderFooter> {
     let mut paragraphs = Vec::new();
+    let mut top_border: Option<HFBorder> = None;
+    let mut bottom_border: Option<HFBorder> = None;
     for child in &footer.children {
         match child {
             docx_rs::FooterChild::Paragraph(paragraph) => {
                 paragraphs.push(convert_hf_paragraph(paragraph));
             }
             docx_rs::FooterChild::Table(table) => {
-                paragraphs.extend(convert_hf_table_to_paragraphs(table));
+                let (table_paragraphs, table_top_border, table_bottom_border) =
+                    convert_hf_table_to_paragraphs(table);
+                paragraphs.extend(table_paragraphs);
+                if top_border.is_none() {
+                    top_border = table_top_border;
+                }
+                if bottom_border.is_none() {
+                    bottom_border = table_bottom_border;
+                }
             }
             docx_rs::FooterChild::StructuredDataTag(_) => {}
         }
@@ -232,7 +256,11 @@ fn convert_docx_footer(footer: &docx_rs::Footer) -> Option<HeaderFooter> {
     if paragraphs.is_empty() {
         return None;
     }
-    Some(HeaderFooter { paragraphs })
+    Some(HeaderFooter {
+        paragraphs,
+        top_border,
+        bottom_border,
+    })
 }
 
 /// Convert a header/footer layout table into HeaderFooterParagraphs.
@@ -242,7 +270,13 @@ fn convert_docx_footer(footer: &docx_rs::Footer) -> Option<HeaderFooter> {
 /// header/footer line. Each table row becomes one HeaderFooterParagraph,
 /// with a flexible Spacer inserted between cells so the cell contents are
 /// pushed apart on the line, approximating the original column layout.
-fn convert_hf_table_to_paragraphs(table: &docx_rs::Table) -> Vec<HeaderFooterParagraph> {
+fn convert_hf_table_to_paragraphs(
+    table: &docx_rs::Table,
+) -> (
+    Vec<HeaderFooterParagraph>,
+    Option<HFBorder>,
+    Option<HFBorder>,
+) {
     let mut paragraphs = Vec::new();
     for row_child in &table.rows {
         let docx_rs::TableChild::TableRow(row) = row_child;
@@ -290,7 +324,86 @@ fn convert_hf_table_to_paragraphs(table: &docx_rs::Table) -> Vec<HeaderFooterPar
             });
         }
     }
-    paragraphs
+    let top_border = extract_hf_table_top_border(table);
+    let bottom_border = extract_hf_table_bottom_border(table);
+    (paragraphs, top_border, bottom_border)
+}
+
+/// Extract a bottom border from a header layout table. Word's headers
+/// commonly draw a horizontal separator BELOW the header content by
+/// setting `<w:tcBorders><w:bottom .../></w:tcBorders>` on cells in the
+/// last row (or every cell of a single-row layout table). The header
+/// then renders as: SULIT / Document title / Section info / ─── HR ───.
+/// We scan every cell in the table and use the first non-nil bottom
+/// border we find — most headers have a uniform line across all cells.
+fn extract_hf_table_bottom_border(table: &docx_rs::Table) -> Option<HFBorder> {
+    for row_child in &table.rows {
+        let docx_rs::TableChild::TableRow(row) = row_child;
+        for cell_child in &row.cells {
+            let docx_rs::TableRowChild::TableCell(cell) = cell_child;
+            let cell_json = serde_json::to_value(&cell.property).ok()?;
+            let borders = match cell_json.get("borders") {
+                Some(b) => b,
+                None => continue,
+            };
+            let bottom = match borders.get("bottom") {
+                Some(b) if !b.is_null() => b,
+                _ => continue,
+            };
+            let val = match bottom.get("borderType").and_then(|v| v.as_str()) {
+                Some(v) => v,
+                None => continue,
+            };
+            if val == "nil" || val == "none" {
+                continue;
+            }
+            let sz_eighths = bottom.get("size").and_then(|v| v.as_u64()).unwrap_or(4);
+            let thickness_pt = (sz_eighths as f64) / 8.0;
+            let style = match val {
+                "thickThinSmallGap" | "thinThickSmallGap" | "thickThinMediumGap"
+                | "thinThickMediumGap" | "thickThinLargeGap" | "thinThickLargeGap" | "double"
+                | "doubleWave" | "triple" => HFBorderStyle::Double,
+                _ => HFBorderStyle::Single,
+            };
+            return Some(HFBorder {
+                thickness_pt,
+                style,
+            });
+        }
+    }
+    None
+}
+
+/// Extract the top border from a header/footer layout table, if present.
+/// Word commonly draws a separator line above the footer text by setting
+/// `<w:tblBorders><w:top w:val="thickThinSmallGap" w:sz="24" .../></w:tblBorders>`
+/// on the layout table; the other sides are left unset and don't draw.
+/// We map this back to an HFBorder so the renderer can emit a horizontal
+/// rule above the header/footer paragraphs.
+fn extract_hf_table_top_border(table: &docx_rs::Table) -> Option<HFBorder> {
+    let property_json = serde_json::to_value(&table.property).ok()?;
+    let borders_json = property_json.get("borders")?;
+    let top = borders_json.get("top")?;
+    let val = top.get("borderType").and_then(|v| v.as_str())?;
+    if val == "nil" || val == "none" {
+        return None;
+    }
+    // `w:sz` is in eighths of a point (1 = 0.125pt).
+    let sz_eighths = top.get("size").and_then(|v| v.as_u64()).unwrap_or(4);
+    let thickness_pt = (sz_eighths as f64) / 8.0;
+    let style = match val {
+        // Word's "thickThinSmallGap" / "thinThickSmallGap" / "double" all
+        // render as parallel lines; we approximate as a double rule.
+        "thickThinSmallGap" | "thinThickSmallGap" | "thickThinMediumGap" | "thinThickMediumGap"
+        | "thickThinLargeGap" | "thinThickLargeGap" | "double" | "doubleWave" | "triple" => {
+            HFBorderStyle::Double
+        }
+        _ => HFBorderStyle::Single,
+    };
+    Some(HFBorder {
+        thickness_pt,
+        style,
+    })
 }
 
 /// Extract the header for a section, preferring the default variant and falling back to

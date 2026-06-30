@@ -18,6 +18,8 @@ fn test_generate_flow_page_with_text_header() {
                     footnote: None,
                 })],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         footer: None,
         columns: None,
@@ -49,6 +51,8 @@ fn test_generate_flow_page_with_page_number_footer() {
                     HFInline::PageNumber,
                 ],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         columns: None,
     })]);
@@ -76,12 +80,16 @@ fn test_generate_flow_page_with_header_and_footer() {
                     footnote: None,
                 })],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         footer: Some(HeaderFooter {
             paragraphs: vec![HeaderFooterParagraph {
                 style: ParagraphStyle::default(),
                 elements: vec![HFInline::PageNumber],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         columns: None,
     })]);
@@ -133,6 +141,8 @@ fn test_generate_flow_page_reserves_hf_margin_from_paragraph_metrics() {
                     })],
                 },
             ],
+            top_border: None,
+            bottom_border: None,
         }),
         footer: Some(HeaderFooter {
             paragraphs: vec![
@@ -164,6 +174,8 @@ fn test_generate_flow_page_reserves_hf_margin_from_paragraph_metrics() {
                     })],
                 },
             ],
+            top_border: None,
+            bottom_border: None,
         }),
         columns: None,
     })]);
@@ -490,6 +502,8 @@ fn test_table_page_with_header() {
                     footnote: None,
                 })],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         footer: None,
         charts: vec![],
@@ -531,6 +545,8 @@ fn test_table_page_with_page_number_footer() {
                     HFInline::TotalPages,
                 ],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         charts: vec![],
     });

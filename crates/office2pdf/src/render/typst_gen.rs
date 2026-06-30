@@ -884,13 +884,73 @@ fn hf_needs_context(hf: &HeaderFooter) -> bool {
 
 /// Generate inline content for a header or footer.
 fn generate_hf_content(out: &mut String, hf: &HeaderFooter) {
+    // Suppress Typst's default block spacing (~1em = 12-14pt at 11pt font)
+    // inside the footer. The default applies between every block element
+    // (#line, #align, #text-wrapped-in-paragraph) and compounds quickly:
+    // a typical 3-block footer (rule + "ALFRESCO MANUAL/Page N" +
+    // "SULIT") ends up with ~27pt between the rule and the next text
+    // line, versus Word's tight ~5-8pt. Setting spacing: 0pt removes that
+    // default; explicit #v(...) emissions still produce gaps where the
+    // author specified them via space_before/after.
+    out.push_str("#set block(spacing: 0pt)\n");
+    // Top border above the header/footer paragraphs. Word commonly draws a
+    // horizontal separator above the footer (or below the header) by
+    // wrapping the content in a layout table with
+    // `<w:tblBorders><w:top w:val="thickThinSmallGap" w:sz="24" .../>`.
+    // The parser captures that as `hf.top_border`; here we emit it as a
+    // Typst #line element. `thickThinSmallGap` is a double rule in Word
+    // (a thick line then a thin one, with a small gap between); Typst
+    // doesn't have a primitive for that, so we approximate by emitting
+    // two parallel `#line`s separated by a small `#v` — the visual is
+    // very close. Single-style borders emit a single line at the
+    // authored thickness. Width is `100%` of the available footer width.
+    if let Some(border) = hf.top_border {
+        // Emit a single horizontal rule. Word's "thickThinSmallGap" and
+        // "double" border styles technically render as two parallel lines
+        // with a tiny gap, but at typical authored thicknesses (sz=24 =
+        // 3pt) the second line and gap are visually negligible — Word
+        // itself collapses them to one apparent rule in PDF output. A
+        // single line at a moderate thickness avoids the visual
+        // "double rule" we got from emitting both and also keeps the
+        // vertical footprint small enough not to push the last footer
+        // paragraph past the page's footer box.
+        let stroke_pt = border.thickness_pt.clamp(0.5, 1.5);
+        let _ = write!(
+            out,
+            "#place(top, dy: 0pt)[#line(length: 100%, stroke: {}pt)]
+#v(-12pt)\\
+",
+            format_f64(stroke_pt),
+        );
+    }
     for (i, para) in hf.paragraphs.iter().enumerate() {
         if i > 0 {
+            // When a top border is present (the heuristic that we're in a
+            // Word-style "rule + two-line text" footer), explicitly pull
+            // subsequent paragraphs upward by a fixed amount. Typst applies
+            // ~14-25pt of default block spacing between alignment blocks
+            // (#align(left)[...] + #align(right)[...]) which #set block
+            // doesn't reliably override; the result is huge baseline gaps
+            // between "ALFRESCO MANUAL/Page N" and "SULIT" (~41pt measured
+            // vs Word's ~14pt). A direct negative-v cancels the surplus.
+            let extra_pull = if hf.top_border.is_some() {
+                "#v(-42pt)\\\n"
+            } else {
+                ""
+            };
             match para.style.space_before {
                 Some(space_before) if space_before > 0.0 => {
-                    let _ = write!(out, "\\\n#v({}pt)\\\n", format_f64(space_before));
+                    let _ = write!(
+                        out,
+                        "\\\n#v({}pt)\\\n{}",
+                        format_f64(space_before),
+                        extra_pull
+                    );
                 }
-                _ => out.push_str("\\\n"),
+                _ => {
+                    out.push_str("\\\n");
+                    out.push_str(extra_pull);
+                }
             }
         }
         // Apply paragraph alignment if set
@@ -922,6 +982,24 @@ fn generate_hf_content(out: &mut String, hf: &HeaderFooter) {
         if para.style.alignment.is_some() {
             out.push(']');
         }
+    }
+
+    // Bottom border below the header/footer paragraphs. Headers commonly
+    // author this via cell-level <w:tcBorders><w:bottom .../> on the
+    // layout table's cells (vs the footer pattern of table-level
+    // <w:tblBorders><w:top .../>). The visual result is a horizontal rule
+    // between the header text and the body text below — the classic
+    // "Section info / ─── HR ───" header layout. Emitted via #place(bottom)
+    // so it positions at the bottom of the header container without
+    // consuming flow space.
+    if let Some(border) = hf.bottom_border {
+        let stroke_pt = border.thickness_pt.clamp(0.5, 1.5);
+        let _ = write!(
+            out,
+            "\\
+#place(bottom, dy: 0pt)[#line(length: 100%, stroke: {}pt)]",
+            format_f64(stroke_pt),
+        );
     }
 }
 

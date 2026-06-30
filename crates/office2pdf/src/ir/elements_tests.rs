@@ -196,6 +196,8 @@ fn test_header_footer_with_text() {
                 footnote: None,
             })],
         }],
+        top_border: None,
+        bottom_border: None,
     };
     assert_eq!(hf.paragraphs.len(), 1);
     assert_eq!(hf.paragraphs[0].elements.len(), 1);
@@ -220,6 +222,8 @@ fn test_header_footer_with_page_number() {
                 HFInline::PageNumber,
             ],
         }],
+        top_border: None,
+        bottom_border: None,
     };
     assert_eq!(hf.paragraphs[0].elements.len(), 2);
     assert!(matches!(hf.paragraphs[0].elements[1], HFInline::PageNumber));

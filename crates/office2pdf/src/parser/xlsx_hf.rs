@@ -105,7 +105,11 @@ pub(super) fn parse_hf_format_string(format_str: &str) -> Option<HeaderFooter> {
     if paragraphs.is_empty() {
         None
     } else {
-        Some(HeaderFooter { paragraphs })
+        Some(HeaderFooter {
+            paragraphs,
+            top_border: None,
+            bottom_border: None,
+        })
     }
 }
 

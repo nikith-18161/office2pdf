@@ -289,6 +289,8 @@ fn test_continuous_section_merges_into_previous_flow_page() {
                     footnote: None,
                 })],
             }],
+            top_border: None,
+            bottom_border: None,
         }),
         footer: None,
         columns: None,
